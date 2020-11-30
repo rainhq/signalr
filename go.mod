@@ -1,10 +1,10 @@
-module github.com/carterjones/signalr
+module github.com/rainhq/signalr/v2
+
+go 1.15
 
 require (
-	github.com/carterjones/go-cloudflare-scraper v0.1.2
-	github.com/elazarl/goproxy v0.0.0-20181111060418-2ce16c963a8a
-	github.com/gorilla/websocket v1.4.0
-	github.com/pkg/errors v0.8.1
-	github.com/robertkrimen/otto v0.0.0-20180617131154-15f95af6e78d // indirect
-	gopkg.in/sourcemap.v1 v1.0.5 // indirect
+	github.com/google/go-cmp v0.5.4
+	github.com/gorilla/websocket v1.4.2
+	go.uber.org/atomic v1.7.0
+	golang.org/x/sync v0.0.0-20201020160332-67f06af15bc9
 )

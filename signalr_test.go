@@ -1,25 +1,27 @@
 package signalr_test
 
 import (
+	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
-	"net/http/httptest"
 	"net/url"
 	"os"
-	"path/filepath"
-	"reflect"
-	"runtime"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/carterjones/signalr"
-	"github.com/carterjones/signalr/hubs"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/gorilla/websocket"
+	"github.com/rainhq/signalr/v2"
+	"github.com/rainhq/signalr/v2/hubs"
+	"github.com/rainhq/signalr/v2/internal/testutil"
 )
 
 func ExampleClient_Run() {
@@ -33,48 +35,17 @@ func ExampleClient_Run() {
 	)
 
 	// Define handlers.
-	msgHandler := func(msg signalr.Message) { log.Println(msg) }
-	panicIfErr := func(err error) {
-		if err != nil {
-			log.Panic(err)
-		}
+	msgHandler := func(_ context.Context, msg signalr.Message) error {
+		log.Println(msg)
+		return nil
 	}
 
-	// Start the connection.
-	err := c.Run(msgHandler, panicIfErr)
-	if err != nil {
-		log.Panic(err)
+	ctx := context.Background()
+
+	// Start the run loop.
+	if err := c.Run(ctx, msgHandler); err != nil {
+		log.Fatal(err)
 	}
-
-	// Wait indefinitely.
-	select {}
-}
-
-// This example shows the most basic way to start a websocket connection.
-func Example_basic() {
-	// Prepare a SignalR client.
-	c := signalr.New(
-		"fake-server.definitely-not-real",
-		"1.5",
-		"/signalr",
-		`[{"name":"awesomehub"}]`,
-		nil,
-	)
-
-	// Define message and error handlers.
-	msgHandler := func(msg signalr.Message) { log.Println(msg) }
-	panicIfErr := func(err error) {
-		if err != nil {
-			log.Panic(err)
-		}
-	}
-
-	// Start the connection.
-	err := c.Run(msgHandler, panicIfErr)
-	panicIfErr(err)
-
-	// Wait indefinitely.
-	select {}
 }
 
 // This example shows how to manually perform each of the initialization steps.
@@ -92,103 +63,85 @@ func Example_complex() {
 	// all the available options that are exposed via public fields.
 
 	// Define message and error handlers.
-	msgHandler := func(msg signalr.Message) { log.Println(msg) }
-	panicIfErr := func(err error) {
-		if err != nil {
-			log.Panic(err)
-		}
+	msgHandler := func(_ context.Context, msg signalr.Message) error {
+		log.Println(msg)
+		return nil
 	}
+
+	ctx := context.Background()
 
 	// Manually perform the initialization routine.
-	err := c.Negotiate()
-	panicIfErr(err)
-	conn, err := c.Connect()
-	panicIfErr(err)
-	err = c.Start(conn)
-	panicIfErr(err)
+	if err := c.Negotiate(ctx); err != nil {
+		log.Fatal(err)
+	}
+
+	conn, err := c.Connect(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := c.Start(ctx, conn); err != nil {
+		log.Fatal(err)
+	}
 
 	// Begin the message reading loop.
-	go c.ReadMessages(msgHandler, panicIfErr)
-
-	// Wait indefinitely.
-	select {}
-}
-
-func red(s string) string {
-	return "\033[31m" + s + "\033[39m"
-}
-
-func equals(tb testing.TB, id string, exp, act interface{}) {
-	if !reflect.DeepEqual(exp, act) {
-		_, file, line, _ := runtime.Caller(1)
-		tb.Errorf(red("%s:%d %s: \n\texp: %#v\n\tgot: %#v\n"),
-			filepath.Base(file), line, id, exp, act)
+	if err := c.ReadMessages(ctx, msgHandler); err != nil {
+		log.Fatal(err)
 	}
 }
 
-func ok(tb testing.TB, id string, err error) {
+func equals(t testing.TB, exp, act interface{}, opts ...cmp.Option) {
+	t.Helper()
+
+	if exp == nil && act == nil {
+		return
+	}
+
+	if !cmp.Equal(exp, act, opts...) {
+		t.Errorf("unexpected value:\n%s", cmp.Diff(exp, act, opts...))
+	}
+}
+
+func ok(t testing.TB, err error) bool {
+	t.Helper()
+
 	if err != nil {
-		_, file, line, _ := runtime.Caller(1)
-		tb.Errorf(red("%s:%d %s | unexpected error: %s\n"),
-			filepath.Base(file), line, id, err.Error())
+		t.Errorf("unexpected error: %+v", err)
 	}
+
+	return err == nil
 }
 
-func notNil(tb testing.TB, id string, act interface{}) {
+func notNil(t testing.TB, act interface{}) {
+	t.Helper()
+
 	if act == nil {
-		_, file, line, _ := runtime.Caller(1)
-		tb.Errorf(red("%s:%d (%s):\n\texp: a non-nil value\n\tgot: %#v\n"),
-			filepath.Base(file), line, id, act)
+		t.Errorf("expected non-nil value, got: %v", act)
 	}
 }
 
-func notEmpty(tb testing.TB, id string, act string) {
+func notEmpty(t testing.TB, act string) {
+	t.Helper()
+
 	if act == "" {
-		_, file, line, _ := runtime.Caller(1)
-		tb.Errorf(red("%s:%d (%s):\n\texp: a non-empty value\n\tgot: %#v\n"),
-			filepath.Base(file), line, id, act)
+		t.Errorf("expected non-empty vale, got: %q", act)
 	}
 }
 
-// Note: this is largely derived from
-// https://github.com/golang/go/blob/1c69384da4fb4a1323e011941c101189247fea67/src/net/http/response_test.go#L915-L940
-func errMatches(tb testing.TB, id string, err error, wantErr interface{}) {
-	if err == nil {
-		if wantErr == nil {
-			return
-		}
+func errMatches(t testing.TB, exp, act error) {
+	t.Helper()
 
-		if sub, ok := wantErr.(string); ok {
-			tb.Errorf(red("%s | unexpected success; want error with substring %q"), id, sub)
-			return
-		}
-
-		tb.Errorf(red("%s | unexpected success; want error %v"), id, wantErr)
+	if errors.Is(act, exp) || errors.As(act, &exp) {
 		return
 	}
 
-	if wantErr == nil {
-		tb.Errorf(red("%s | %v; want success"), id, err)
-		return
+	if !cmp.Equal(exp, act, cmpopts.EquateErrors()) {
+		t.Errorf("invalid error value:\n%s", cmp.Diff(exp, act, cmpopts.EquateErrors()))
 	}
-
-	if sub, ok := wantErr.(string); ok {
-		if strings.Contains(err.Error(), sub) {
-			return
-		}
-		tb.Errorf(red("%s | error = %v; want an error with substring %q"), id, err, sub)
-		return
-	}
-
-	if err == wantErr {
-		return
-	}
-
-	tb.Errorf(red("%s | %v; want %v"), id, err, wantErr)
 }
 
-func hostFromServerURL(url string) (host string) {
-	host = strings.TrimPrefix(url, "https://")
+func hostFromServerURL(urlStr string) (host string) {
+	host = strings.TrimPrefix(urlStr, "https://")
 	host = strings.TrimPrefix(host, "http://")
 	return
 }
@@ -196,45 +149,6 @@ func hostFromServerURL(url string) (host string) {
 const (
 	serverResponseWriteTimeout = 500 * time.Millisecond
 )
-
-func newTestServer(fn http.HandlerFunc, useTLS bool) *httptest.Server {
-	// Create the server.
-	ts := httptest.NewUnstartedServer(fn)
-
-	// Set the write timeout so that we can test timeouts later on.
-	ts.Config.WriteTimeout = serverResponseWriteTimeout
-
-	if useTLS {
-		ts.StartTLS()
-	} else {
-		ts.Start()
-	}
-
-	return ts
-}
-
-func newTestClient(
-	protocol, endpoint, connectionData string,
-	params map[string]string,
-	ts *httptest.Server,
-) *signalr.Client {
-	// Prepare a SignalR client.
-	c := signalr.New(hostFromServerURL(ts.URL), protocol, endpoint, connectionData, params)
-	c.HTTPClient = ts.Client()
-
-	// Save the TLS config in case this is using TLS.
-	if ts.TLS != nil {
-		// This is a local-only test, so we don't care about validating
-		// certificates. This simplifies things greatly.
-		// nolint:gosec
-		c.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-		c.Scheme = signalr.HTTPS
-	} else {
-		c.Scheme = signalr.HTTP
-	}
-
-	return c
-}
 
 func throw503Error(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusServiceUnavailable)
@@ -264,7 +178,7 @@ func causeWriteResponseTimeout(w http.ResponseWriter, r *http.Request) {
 	time.Sleep(3 * serverResponseWriteTimeout)
 }
 
-func TestClient_Negotiate(t *testing.T) {
+func TestClientNegotiate(t *testing.T) {
 	t.Parallel()
 
 	// Make a requestID available to test cases in the event that multiple
@@ -281,10 +195,10 @@ func TestClient_Negotiate(t *testing.T) {
 		exp      *signalr.Client
 		scheme   signalr.Scheme
 		params   map[string]string
-		wantErr  string
+		wantErr  error
 	}{
 		"successful http": {
-			fn: signalr.TestNegotiate,
+			fn: testutil.TestNegotiate,
 			in: &signalr.Client{
 				Protocol:       "1337",
 				Endpoint:       "/signalr",
@@ -300,7 +214,7 @@ func TestClient_Negotiate(t *testing.T) {
 			},
 		},
 		"successful https": {
-			fn: signalr.TestNegotiate,
+			fn: testutil.TestNegotiate,
 			in: &signalr.Client{
 				Protocol:       "1337",
 				Endpoint:       "/signalr",
@@ -318,19 +232,19 @@ func TestClient_Negotiate(t *testing.T) {
 			fn:      throw503Error,
 			in:      &signalr.Client{},
 			exp:     &signalr.Client{},
-			wantErr: "503 Service Unavailable",
+			wantErr: errors.New("503 Service Unavailable"),
 		},
 		"default error": {
 			fn:      throw678Error,
 			in:      &signalr.Client{},
 			exp:     &signalr.Client{},
-			wantErr: "678 status code",
+			wantErr: errors.New("678 status code"),
 		},
 		"failed get request": {
 			fn:      causeWriteResponseTimeout,
 			in:      &signalr.Client{},
 			exp:     &signalr.Client{},
-			wantErr: "EOF",
+			wantErr: io.EOF,
 		},
 		"invalid json": {
 			fn: func(w http.ResponseWriter, r *http.Request) {
@@ -341,21 +255,21 @@ func TestClient_Negotiate(t *testing.T) {
 			},
 			in:      &signalr.Client{},
 			exp:     &signalr.Client{},
-			wantErr: "invalid character 'i' looking for beginning of value",
+			wantErr: &json.SyntaxError{},
 		},
 		"request preparation failure": {
-			fn:      signalr.TestNegotiate,
+			fn:      testutil.TestNegotiate,
 			in:      &signalr.Client{},
 			scheme:  ":",
 			exp:     &signalr.Client{},
-			wantErr: "request preparation failed",
+			wantErr: nil,
 		},
 		"call debug messages": {
 			fn:       throw503Error,
 			in:       &signalr.Client{},
 			exp:      &signalr.Client{},
 			useDebug: true,
-			wantErr:  "503 Service Unavailable",
+			wantErr:  errors.New("503 Service Unavailable"),
 		},
 		"recover after failure": {
 			fn: func(w http.ResponseWriter, r *http.Request) {
@@ -363,7 +277,7 @@ func TestClient_Negotiate(t *testing.T) {
 					throw503Error(w, r)
 					requestID++
 				} else {
-					signalr.TestNegotiate(w, r)
+					testutil.TestNegotiate(w, r)
 				}
 			},
 			in: &signalr.Client{
@@ -381,7 +295,7 @@ func TestClient_Negotiate(t *testing.T) {
 			},
 		},
 		"custom parameters": {
-			fn: signalr.TestNegotiate,
+			fn: testutil.TestNegotiate,
 			in: &signalr.Client{
 				Protocol:       "1337",
 				Endpoint:       "/signalr",
@@ -402,65 +316,63 @@ func TestClient_Negotiate(t *testing.T) {
 	for id, tc := range cases {
 		tc := tc
 
-		// Set the debug flag.
-		if tc.useDebug {
-			os.Setenv("DEBUG", "true")
-		}
+		t.Run(id, func(t *testing.T) {
+			// Set the debug flag.
+			if tc.useDebug {
+				os.Setenv("DEBUG", "true")
+			}
 
-		// Reset the request ID.
-		requestID = 0
+			// Reset the request ID.
+			requestID = 0
 
-		// Prepare to save parameters.
-		var params map[string]string
-		done := make(chan struct{})
+			// Prepare to save parameters.
+			var params map[string]string
 
-		// Create a test server.
-		ts := newTestServer(func(w http.ResponseWriter, r *http.Request) {
-			params = extractCustomParams(r.URL.Query())
-			tc.fn(w, r)
-			go func() { done <- struct{}{} }()
-		}, tc.TLS)
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
 
-		// Create a test client.
-		c := newTestClient(tc.in.Protocol, tc.in.Endpoint, tc.in.ConnectionData, tc.params, ts)
+			// Create a test server.
+			ts := testutil.NewTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				params = extractCustomParams(r.URL.Query())
+				tc.fn(w, r)
+			}), tc.TLS)
+			t.Cleanup(ts.Close)
 
-		// Set the wait time to milliseconds.
-		c.RetryWaitDuration = 1 * time.Millisecond
+			// Create a test client.
+			c := testutil.NewTestClient(tc.in.Protocol, tc.in.Endpoint, tc.in.ConnectionData, tc.params, ts)
 
-		// Set a custom scheme if one is specified.
-		if tc.scheme != "" {
-			c.Scheme = tc.scheme
-		}
+			// Set the wait time to milliseconds.
+			c.RetryWaitDuration = 1 * time.Millisecond
 
-		// Perform the negotiation.
-		err := c.Negotiate()
+			// Set a custom scheme if one is specified.
+			if tc.scheme != "" {
+				c.Scheme = tc.scheme
+			}
 
-		// If the scheme is invalid, this will never send a request, so we move
-		// on. Otherwise, we wait for the request to complete.
-		if tc.scheme != ":" {
-			<-done
-		}
+			// Perform the negotiation.
+			err := c.Negotiate(ctx)
 
-		// Make sure the error matches the expected error.
-		if tc.wantErr != "" {
-			errMatches(t, id, err, tc.wantErr)
-		} else {
-			ok(t, id, err)
-		}
+			// If the scheme is invalid, this will never send a request, so we move
+			// on. Otherwise, we wait for the request to complete.
+			if tc.scheme != ":" {
+				return
+			}
 
-		// Validate the things we expect.
-		equals(t, id, tc.exp.ConnectionToken, c.ConnectionToken)
-		equals(t, id, tc.exp.ConnectionID, c.ConnectionID)
-		equals(t, id, tc.exp.Protocol, c.Protocol)
-		equals(t, id, tc.exp.Endpoint, c.Endpoint)
-		equals(t, id, tc.params, params)
+			// Make sure the error matches the expected error.
+			errMatches(t, tc.wantErr, err)
 
-		ts.Close()
+			// Validate the things we expect.
+			equals(t, tc.exp.ConnectionToken, c.ConnectionToken)
+			equals(t, tc.exp.ConnectionID, c.ConnectionID)
+			equals(t, tc.exp.Protocol, c.Protocol)
+			equals(t, tc.exp.Endpoint, c.Endpoint)
+			equals(t, tc.params, params)
 
-		// Unset the debug flag.
-		if tc.useDebug {
-			os.Unsetenv("DEBUG")
-		}
+			// Unset the debug flag.
+			if tc.useDebug {
+				os.Unsetenv("DEBUG")
+			}
+		})
 	}
 }
 
@@ -489,171 +401,152 @@ func extractCustomParams(values url.Values) map[string]string {
 func TestClient_Connect(t *testing.T) {
 	t.Parallel()
 
-	cases := map[string]struct {
+	cases := []struct {
+		name    string
 		fn      http.HandlerFunc
-		TLS     bool
+		tls     bool
 		cookies []*http.Cookie
 		params  map[string]string
-		wantErr string
+		wantErr error
 	}{
-		"successful https connect": {
-			fn:  signalr.TestConnect,
-			TLS: true,
+		{
+			name: "successful https connect",
+			fn:   testutil.TestConnect,
+			tls:  true,
 		},
-		"successful http connect": {
-			fn:  signalr.TestConnect,
-			TLS: false,
+		{
+			name: "successful http connect",
+			fn:   testutil.TestConnect,
 		},
-		"service not available": {
+		{
+			name:    "service not available",
 			fn:      throw503Error,
-			TLS:     true,
-			wantErr: websocket.ErrBadHandshake.Error(),
+			tls:     true,
+			wantErr: websocket.ErrBadHandshake,
 		},
-		"generic error": {
+		{
+			name:    "generic error",
 			fn:      throw404Error,
-			TLS:     true,
-			wantErr: "xconnect failed: 404 Not Found, retry 0: websocket: bad handshake",
+			tls:     true,
+			wantErr: errors.New("xconnect failed: 404 Not Found, retry 0: websocket: bad handshake"),
 		},
-		"custom cookie jar": {
-			fn:  signalr.TestConnect,
-			TLS: false,
+		{
+			name: "custom cookie jar",
+			fn:   testutil.TestConnect,
 			cookies: []*http.Cookie{{
 				Name:  "hello",
 				Value: "world",
 			}},
 		},
-		"custom parameters": {
-			fn:     signalr.TestConnect,
-			TLS:    true,
+		{
+			name:   "custom parameters",
+			fn:     testutil.TestConnect,
+			tls:    true,
 			params: map[string]string{"custom-key": "custom-value"},
 		},
 	}
 
-	for id, tc := range cases {
+	for _, tc := range cases {
 		tc := tc
 
-		// Make a cookie recording wrapper function.
-		done := make(chan struct{})
-		var cookies []*http.Cookie
-		var params map[string]string
-		var tid string
-		recordResponse := func(w http.ResponseWriter, r *http.Request) {
-			cookies = r.Cookies()
-			params = extractCustomParams(r.URL.Query())
-			tid = r.URL.Query().Get("tid")
-			tc.fn(w, r)
-			go func() { done <- struct{}{} }()
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			recordResponse := func(w http.ResponseWriter, r *http.Request) {
+				if tc.wantErr == nil {
+					equals(t, tc.cookies, r.Cookies(), cmpopts.EquateEmpty())
+					equals(t, tc.params, extractCustomParams(r.URL.Query()))
+					notEmpty(t, r.URL.Query().Get("tid"))
+				}
 
-		// Set up the test server.
-		ts := newTestServer(recordResponse, tc.TLS)
-
-		// Prepare a new client.
-		c := newTestClient("", "", "", tc.params, ts)
-
-		// Set cookies if they have been configured.
-		if tc.cookies != nil {
-			u, err := url.Parse(ts.URL)
-			if err != nil {
-				log.Panic(err)
+				tc.fn(w, r)
 			}
-			c.HTTPClient.Jar, err = cookiejar.New(nil)
-			if err != nil {
-				log.Panic(err)
+
+			// Set up the test server.
+			ts := testutil.NewTestServer(http.HandlerFunc(recordResponse), tc.tls)
+			t.Cleanup(ts.Close)
+
+			// Prepare a new client.
+			c := testutil.NewTestClient("", "", "", tc.params, ts)
+
+			// Set cookies if they have been configured.
+			if tc.cookies != nil {
+				u, err := url.Parse(ts.URL)
+				if err != nil {
+					log.Panic(err)
+				}
+				c.HTTPClient.Jar, err = cookiejar.New(nil)
+				if err != nil {
+					log.Panic(err)
+				}
+				c.HTTPClient.Jar.SetCookies(u, tc.cookies)
 			}
-			c.HTTPClient.Jar.SetCookies(u, tc.cookies)
-		}
 
-		// Set the wait time to milliseconds.
-		c.RetryWaitDuration = 1 * time.Millisecond
+			// Set the wait time to milliseconds.
+			c.RetryWaitDuration = 1 * time.Millisecond
 
-		// Perform the connection.
-		conn, err := c.Connect()
-		<-done
-
-		if tc.wantErr != "" {
-			errMatches(t, id, err, tc.wantErr)
-		} else {
-			if len(tc.cookies) > 0 {
-				equals(t, id, tc.cookies, cookies)
+			// Perform the connection.
+			conn, err := c.Connect(context.Background())
+			errMatches(t, tc.wantErr, err)
+			if tc.wantErr == nil {
+				notNil(t, conn)
 			}
-			equals(t, id, tc.params, params)
-			ok(t, id, err)
-			notEmpty(t, id, tid)
-			_, cerr := strconv.Atoi(tid)
-			ok(t, id, cerr)
-		}
-
-		notNil(t, id, conn)
-
-		ts.Close()
+		})
 	}
 }
 
 func TestClient_Reconnect(t *testing.T) {
 	t.Parallel()
 
-	cases := map[string]struct {
-		fn          http.HandlerFunc
+	cases := []struct {
+		name        string
 		groupsToken string
 		messageID   string
-		wantErr     string
 	}{
-		"successful reconnect": {
-			fn: signalr.TestReconnect,
+		{
+			name: "successful reconnect",
 		},
-		"groups token": {
-			fn:          signalr.TestReconnect,
+		{
+			name:        "groups token",
 			groupsToken: "my-custom-token",
 		},
-		"message id": {
-			fn:        signalr.TestReconnect,
+		{
+			name:      "message id",
 			messageID: "unique-message-id",
 		},
 	}
 
-	for id, tc := range cases {
+	for _, tc := range cases {
 		tc := tc
 
-		// Make a cookie recording wrapper function.
-		done := make(chan struct{})
-		var groupsToken string
-		var messageID string
-		recordResponse := func(w http.ResponseWriter, r *http.Request) {
-			groupsToken = r.URL.Query().Get("groupsToken")
-			messageID = r.URL.Query().Get("messageId")
-			tc.fn(w, r)
-			go func() { done <- struct{}{} }()
-		}
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
 
-		// Set up the test server.
-		ts := newTestServer(recordResponse, true)
+			recordResponse := func(w http.ResponseWriter, req *http.Request) {
+				equals(t, tc.groupsToken, req.URL.Query().Get("groupsToken"))
+				equals(t, tc.messageID, req.URL.Query().Get("messageId"))
+				testutil.TestReconnect(w, req)
+			}
 
-		// Prepare a new client.
-		c := newTestClient("", "", "", nil, ts)
+			// Set up the test server.
+			ts := testutil.NewTestServer(http.HandlerFunc(recordResponse), true)
+			t.Cleanup(ts.Close)
 
-		// Set the wait time to milliseconds.
-		c.RetryWaitDuration = 1 * time.Millisecond
+			// Prepare a new client.
+			c := testutil.NewTestClient("", "", "", nil, ts)
 
-		// Set the group token.
-		c.GroupsToken.Set(tc.groupsToken)
-		c.MessageID.Set(tc.messageID)
+			// Set the wait time to milliseconds.
+			c.RetryWaitDuration = 1 * time.Millisecond
 
-		// Perform the connection.
-		conn, err := c.Reconnect()
-		<-done
+			// Set the group token.
+			c.GroupsToken.Store(tc.groupsToken)
+			c.MessageID.Store(tc.messageID)
 
-		if tc.wantErr != "" {
-			errMatches(t, id, err, tc.wantErr)
-		} else {
-			ok(t, id, err)
-			equals(t, id, tc.groupsToken, groupsToken)
-			equals(t, id, tc.messageID, messageID)
-		}
-
-		notNil(t, id, conn)
-
-		ts.Close()
+			// Perform the connection.
+			conn, err := c.Reconnect(ctx)
+			if ok(t, err) {
+				notNil(t, conn)
+			}
+		})
 	}
 }
 
@@ -695,20 +588,20 @@ func TestClient_Start(t *testing.T) {
 		params      map[string]string
 		groupsToken string
 		messageID   string
-		wantErr     string
+		wantErr     error
 	}{
 		"successful start": {
-			startFn:   signalr.TestStart,
-			connectFn: signalr.TestConnect,
+			startFn:   testutil.TestStart,
+			connectFn: testutil.TestConnect,
 		},
 		"nil connection": {
 			skipConnect: true,
-			wantErr:     "connection is nil",
+			wantErr:     errors.New("connection is nil"),
 		},
 		"failed get request": {
 			startFn:   causeWriteResponseTimeout,
-			connectFn: signalr.TestConnect,
-			wantErr:   "EOF",
+			connectFn: testutil.TestConnect,
+			wantErr:   io.EOF,
 		},
 		"invalid json sent in response to get request": {
 			startFn: func(w http.ResponseWriter, r *http.Request) {
@@ -717,8 +610,8 @@ func TestClient_Start(t *testing.T) {
 					log.Panic(err)
 				}
 			},
-			connectFn: signalr.TestConnect,
-			wantErr:   "invalid character 'i' looking for beginning of value",
+			connectFn: testutil.TestConnect,
+			wantErr:   &json.SyntaxError{},
 		},
 		"non-'started' response": {
 			startFn: func(w http.ResponseWriter, r *http.Request) {
@@ -727,11 +620,11 @@ func TestClient_Start(t *testing.T) {
 					log.Panic(err)
 				}
 			},
-			connectFn: signalr.TestConnect,
-			wantErr:   "start response is not 'started': not expecting this",
+			connectFn: testutil.TestConnect,
+			wantErr:   errors.New("start response is not 'started': not expecting this"),
 		},
 		"non-text message from websocket": {
-			startFn: signalr.TestStart,
+			startFn: testutil.TestStart,
 			connectFn: func(w http.ResponseWriter, r *http.Request) {
 				upgrader := websocket.Upgrader{}
 				c, err := upgrader.Upgrade(w, r, nil)
@@ -743,10 +636,10 @@ func TestClient_Start(t *testing.T) {
 					log.Panic(err)
 				}
 			},
-			wantErr: "unexpected websocket control type",
+			wantErr: errors.New("unexpected websocket control type"),
 		},
 		"invalid json sent in init message": {
-			startFn: signalr.TestStart,
+			startFn: testutil.TestStart,
 			connectFn: func(w http.ResponseWriter, r *http.Request) {
 				upgrader := websocket.Upgrader{}
 				c, err := upgrader.Upgrade(w, r, nil)
@@ -758,10 +651,10 @@ func TestClient_Start(t *testing.T) {
 					log.Panic(err)
 				}
 			},
-			wantErr: "invalid character 'i' looking for beginning of value",
+			wantErr: &json.SyntaxError{},
 		},
 		"wrong S value from server": {
-			startFn: signalr.TestStart,
+			startFn: testutil.TestStart,
 			connectFn: func(w http.ResponseWriter, r *http.Request) {
 				upgrader := websocket.Upgrader{}
 				c, err := upgrader.Upgrade(w, r, nil)
@@ -773,34 +666,28 @@ func TestClient_Start(t *testing.T) {
 					log.Panic(err)
 				}
 			},
-			wantErr: "unexpected S value received from server",
+			wantErr: errors.New("unexpected S value received from server"),
 		},
 		"request preparation failure": {
-			startFn:   signalr.TestStart,
-			connectFn: signalr.TestConnect,
+			startFn:   testutil.TestStart,
+			connectFn: testutil.TestConnect,
 			scheme:    ":",
-			wantErr:   "request preparation failed",
-		},
-		"empty response": {
-			skipRetries: true,
-			startFn:     signalr.TestStart,
-			connectFn:   signalr.TestConnect,
-			wantErr:     "response is nil",
+			wantErr:   errors.New("failed to prepare request: get request creation failed"),
 		},
 		"custom parameters": {
-			startFn:   signalr.TestStart,
-			connectFn: signalr.TestConnect,
+			startFn:   testutil.TestStart,
+			connectFn: testutil.TestConnect,
 			params:    map[string]string{"custom-key": "custom-value"},
 		},
 		"groups token": {
-			startFn:     signalr.TestStart,
+			startFn:     testutil.TestStart,
 			groupsToken: "my-custom-groups-token",
 			connectFn: func(w http.ResponseWriter, r *http.Request) {
 				handleWebsocketWithCustomMsg(w, r, `{"S":1,"G":"my-custom-groups-token"}`)
 			},
 		},
 		"message id": {
-			startFn:   signalr.TestStart,
+			startFn:   testutil.TestStart,
 			messageID: "my-custom-message-id",
 			connectFn: func(w http.ResponseWriter, r *http.Request) {
 				handleWebsocketWithCustomMsg(w, r, `{"S":1,"C":"my-custom-message-id"}`)
@@ -810,70 +697,231 @@ func TestClient_Start(t *testing.T) {
 
 	for id, tc := range cases {
 		tc := tc
-		var params map[string]string
 
-		// Create a test server that is initialized with this test
-		// case's "start handler".
-		ts := newTestServer(func(w http.ResponseWriter, r *http.Request) {
-			if strings.Contains(r.URL.Path, "/start") {
-				params = extractCustomParams(r.URL.Query())
-				tc.startFn(w, r)
-			} else if strings.Contains(r.URL.Path, "/connect") {
-				tc.connectFn(w, r)
+		t.Run(id, func(t *testing.T) {
+			var params map[string]string
+
+			// Create a test server that is initialized with this test
+			// case's "start handler".
+			ts := testutil.NewTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.Contains(r.URL.Path, "/start") {
+					params = extractCustomParams(r.URL.Query())
+					tc.startFn(w, r)
+				} else if strings.Contains(r.URL.Path, "/connect") {
+					tc.connectFn(w, r)
+				}
+			}), true)
+			t.Cleanup(ts.Close)
+
+			// Create a test client and establish the initial connection.
+			c := testutil.NewTestClient("", "", "", tc.params, ts)
+
+			// Set the wait time to milliseconds.
+			c.RetryWaitDuration = 1 * time.Millisecond
+
+			// Don't perform any retries.
+			if tc.skipRetries {
+				c.MaxStartRetries = 0
 			}
-		}, true)
 
-		// Create a test client and establish the initial connection.
-		c := newTestClient("", "", "", tc.params, ts)
+			ctx := context.Background()
 
-		// Set the wait time to milliseconds.
-		c.RetryWaitDuration = 1 * time.Millisecond
-
-		// Don't perform any retries.
-		if tc.skipRetries {
-			c.MaxStartRetries = 0
-		}
-
-		// Perform the connection.
-		var conn signalr.WebsocketConn
-		var err error
-		if !tc.skipConnect {
-			conn, err = c.Connect()
-			if err != nil {
-				// If this fails, it is not part of the test, so we
-				// panic here.
-				log.Panic(err)
+			// Perform the connection.
+			var (
+				conn signalr.WebsocketConn
+				err  error
+			)
+			if !tc.skipConnect {
+				conn, err = c.Connect(ctx)
+				if err != nil {
+					// If this fails, it is not part of the test, so we
+					// panic here.
+					log.Fatal(err)
+				}
 			}
-		}
 
-		// Set a custom scheme if one is specified.
-		if tc.scheme != "" {
-			c.Scheme = tc.scheme
-		}
+			// Set a custom scheme if one is specified.
+			if tc.scheme != "" {
+				c.Scheme = tc.scheme
+			}
 
-		// Execute the start function.
-		err = c.Start(conn)
-		if tc.wantErr != "" {
-			errMatches(t, id, err, tc.wantErr)
-		} else {
-			// Verify that the connection was properly set.
-			equals(t, id, conn, c.Conn())
+			// Execute the start function.
+			err = c.Start(ctx, conn)
+			switch {
+			case tc.wantErr != nil:
+				errMatches(t, err, tc.wantErr)
+			case ok(t, err):
+				// Verify that the connection was properly set.
+				equals(t, conn, c.Conn(), cmpopts.IgnoreUnexported(websocket.Conn{}, tls.Conn{}, net.TCPConn{}))
 
-			// Verify no error occurred.
-			ok(t, id, err)
+				// Verify parameters were properly set.
+				equals(t, tc.params, params)
 
-			// Verify parameters were properly set.
-			equals(t, id, tc.params, params)
+				// Verify the groups token was properly set.
+				equals(t, tc.groupsToken, c.GroupsToken.Load())
 
-			// Verify the groups token was properly set.
-			equals(t, id, tc.groupsToken, c.GroupsToken.Get())
-
-			// Verify the message ID was properly set.
-			equals(t, id, tc.messageID, c.MessageID.Get())
-		}
-
-		ts.Close()
+				// Verify the message ID was properly set.
+				equals(t, tc.messageID, c.MessageID.Load())
+			}
+		})
 	}
+}
+
+func TestClient_ReadMessages(t *testing.T) {
+	t.Parallel()
+
+	genericError := errors.New("generic error")
+
+	repeat := func(count int, errs ...error) []error {
+		res := make([]error, len(errs)*count)
+		for i := 0; i < count; i++ {
+			copy(res[i*len(errs):], errs)
+		}
+
+		return res
+	}
+
+	cases := []struct {
+		name     string
+		errors   []error
+		expected error
+	}{
+		{
+			name:     "1000 error",
+			errors:   []error{&websocket.CloseError{Code: 1000}},
+			expected: nil,
+		},
+		{
+			name:     "1001 error",
+			errors:   []error{&websocket.CloseError{Code: 1001}},
+			expected: nil,
+		},
+		{
+			name:     "1006 error",
+			errors:   []error{&websocket.CloseError{Code: 1006}},
+			expected: nil,
+		},
+		{
+			name:     "generic error",
+			errors:   []error{genericError},
+			expected: genericError,
+		},
+		{
+			name:     "many generic errors",
+			errors:   repeat(20, genericError),
+			expected: genericError,
+		},
+		{
+			name:     "1001, then 1006 error",
+			errors:   []error{&websocket.CloseError{Code: 1001}, &websocket.CloseError{Code: 1006}},
+			expected: nil,
+		},
+		{
+			name:     "1006, then 1001 error",
+			errors:   []error{&websocket.CloseError{Code: 1006}, &websocket.CloseError{Code: 1001}},
+			expected: nil,
+		},
+		{
+			name:     "all the recoverable errors",
+			errors:   []error{&websocket.CloseError{Code: 1000}, &websocket.CloseError{Code: 1001}, &websocket.CloseError{Code: 1006}},
+			expected: nil,
+		},
+		{
+			name:     "multiple recoverable errors",
+			errors:   repeat(5, &websocket.CloseError{Code: 1000}, &websocket.CloseError{Code: 1001}, &websocket.CloseError{Code: 1006}),
+			expected: nil,
+		},
+		{
+			name:     "multiple recoverable errors, followed by one unrecoverable error",
+			errors:   append(repeat(5, &websocket.CloseError{Code: 1000}, &websocket.CloseError{Code: 1001}, &websocket.CloseError{Code: 1006}), genericError),
+			expected: genericError,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+
+		t.Run(tc.name, func(t *testing.T) {
+			ts := testutil.NewTestServer(nil, true)
+			t.Cleanup(ts.Close)
+
+			// Make a new client.
+			c := testutil.NewTestClient("1.5", "/signalr", "all the data", nil, ts)
+			c.RetryWaitDuration = 1 * time.Millisecond
+
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+
+			// Perform the first part of the initialization routine.
+
+			if err := c.Negotiate(ctx); err != nil {
+				t.Fatal(err)
+			}
+
+			conn, err := c.Connect(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if err := c.Start(ctx, conn); err != nil {
+				t.Fatal(err)
+			}
+
+			// Attach a test connection.
+			c.SetConn(NewFakeConn(tc.errors...))
+
+			err = c.ReadMessages(ctx, func(context.Context, signalr.Message) error {
+				cancel()
+				return nil
+			})
+			errMatches(t, tc.expected, err)
+		})
+	}
+}
+
+func TestClient_ReadMessages_earlyClose(t *testing.T) {
+	t.Parallel()
+
+	c := signalr.New("", "", "", "", map[string]string{})
+	c.SetConn(NewFakeConn())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	msgHandler := func(context.Context, signalr.Message) error { return nil }
+	err := c.ReadMessages(ctx, msgHandler)
+	if err != nil {
+		t.Errorf("failed to read messages: %v", err)
+	}
+}
+
+func TestClient_ReadMessages_longReconnectAttempt(t *testing.T) {
+	t.Parallel()
+
+	ts := testutil.NewTestServer(http.HandlerFunc(
+		func(w http.ResponseWriter, req *http.Request) {
+			if strings.Contains(req.URL.Path, "/reconnect") {
+				// Intentionally wait indefinitely on reconnect.
+				<-req.Context().Done()
+				return
+			}
+
+			testutil.DefaultHandler(w, req)
+		}), true)
+	t.Cleanup(ts.Close)
+
+	c := signalr.New("", "", "", "", map[string]string{})
+	// Define a maximum reconnect attempt time for the client.
+	c.MaxReconnectAttemptDuration = 50 * time.Millisecond
+
+	closeErr := &websocket.CloseError{Code: 10006}
+	c.SetConn(NewFakeConn(closeErr))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	t.Cleanup(cancel)
+
+	err := c.ReadMessages(ctx, func(context.Context, signalr.Message) error { return nil })
+	errMatches(t, closeErr, err)
 }
 
 func TestClient_Init(t *testing.T) {
@@ -883,13 +931,13 @@ func TestClient_Init(t *testing.T) {
 		negotiateFn func(http.ResponseWriter, *http.Request)
 		connectFn   func(http.ResponseWriter, *http.Request)
 		startFn     func(http.ResponseWriter, *http.Request)
-		wantErr     string
+		wantErr     error
 	}{
 		"successful init": {
-			negotiateFn: signalr.TestNegotiate,
-			connectFn:   signalr.TestConnect,
-			startFn:     signalr.TestStart,
-			wantErr:     "",
+			negotiateFn: testutil.TestNegotiate,
+			connectFn:   testutil.TestConnect,
+			startFn:     testutil.TestStart,
+			wantErr:     nil,
 		},
 		"failed negotiate": {
 			negotiateFn: func(w http.ResponseWriter, r *http.Request) {
@@ -898,64 +946,77 @@ func TestClient_Init(t *testing.T) {
 					log.Panic(err)
 				}
 			},
-			wantErr: "json unmarshal failed: invalid character 'i' looking for beginning of value",
+			wantErr: &json.SyntaxError{},
 		},
 		"failed connect": {
-			negotiateFn: signalr.TestNegotiate,
+			negotiateFn: testutil.TestNegotiate,
 			connectFn:   throw678Error,
-			wantErr:     "connect failed: xconnect failed: 678 status code 678",
+			wantErr:     errors.New("connect failed: xconnect failed: 678 status code 678"),
 		},
 		"failed start": {
-			negotiateFn: signalr.TestNegotiate,
-			connectFn:   signalr.TestConnect,
+			negotiateFn: testutil.TestNegotiate,
+			connectFn:   testutil.TestConnect,
 			startFn:     causeWriteResponseTimeout,
-			wantErr:     "EOF",
+			wantErr:     io.EOF,
 		},
 	}
 
 	for id, tc := range cases {
 		tc := tc
 
-		ts := newTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			switch {
-			case strings.Contains(r.URL.Path, "/negotiate"):
-				tc.negotiateFn(w, r)
-			case strings.Contains(r.URL.Path, "/connect"):
-				tc.connectFn(w, r)
-			case strings.Contains(r.URL.Path, "/start"):
-				tc.startFn(w, r)
-			default:
-				log.Println("url:", r.URL)
+		t.Run(id, func(t *testing.T) {
+			ts := testutil.NewTestServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.Contains(r.URL.Path, "/negotiate"):
+					tc.negotiateFn(w, r)
+				case strings.Contains(r.URL.Path, "/connect"):
+					tc.connectFn(w, r)
+				case strings.Contains(r.URL.Path, "/start"):
+					tc.startFn(w, r)
+				default:
+					log.Println("url:", r.URL)
+				}
+			}), true)
+			t.Cleanup(ts.Close)
+
+			c := testutil.NewTestClient("1.5", "/signalr", "all the data", nil, ts)
+			c.RetryWaitDuration = 1 * time.Millisecond
+
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+
+			// Define handlers.
+			msgHandler := func(context.Context, signalr.Message) error {
+				cancel()
+				return nil
 			}
-		}), true)
 
-		c := newTestClient("1.5", "/signalr", "all the data", nil, ts)
-		c.RetryWaitDuration = 1 * time.Millisecond
-
-		// Define handlers.
-		msgHandler := func(signalr.Message) {}
-		errHandler := func(error) {}
-
-		// Run the client.
-		err := c.Run(msgHandler, errHandler)
-
-		if tc.wantErr != "" {
-			errMatches(t, id, err, tc.wantErr)
-		} else {
-			ok(t, id, err)
-		}
-
-		ts.Close()
+			// Run the client.
+			err := c.Run(ctx, msgHandler)
+			errMatches(t, tc.wantErr, err)
+		})
 	}
 }
 
 type FakeConn struct {
-	err  error
-	data interface{}
+	errors []error
+	data   interface{}
+}
+
+func NewFakeConn(errs ...error) *FakeConn {
+	return &FakeConn{
+		errors: errs,
+	}
 }
 
 func (c *FakeConn) ReadMessage() (messageType int, p []byte, err error) {
-	return
+	if len(c.errors) == 0 {
+		return 0, nil, nil
+	}
+
+	err = c.errors[0]
+	c.errors = c.errors[1:]
+	return 0, nil, err
 }
 
 func (c *FakeConn) WriteJSON(v interface{}) error {
@@ -963,55 +1024,62 @@ func (c *FakeConn) WriteJSON(v interface{}) error {
 	// inspected later.
 	c.data = v
 
-	return c.err
+	if len(c.errors) == 0 {
+		return nil
+	}
+
+	err := c.errors[0]
+	c.errors = c.errors[1:]
+	return err
 }
 
 func TestClient_Send(t *testing.T) {
 	t.Parallel()
 
+	writeError := errors.New("write error")
+
 	cases := map[string]struct {
 		conn    *FakeConn
-		err     error
-		wantErr string
+		wantErr error
 	}{
 		"successful write": {
-			conn:    new(FakeConn),
-			err:     nil,
-			wantErr: "",
+			conn:    NewFakeConn(),
+			wantErr: nil,
 		},
 		"connection not set": {
 			conn:    nil,
-			err:     nil,
-			wantErr: "send: connection not set",
+			wantErr: signalr.ErrConnectionNotSet,
 		},
 		"write error": {
-			conn:    new(FakeConn),
-			err:     errors.New("test error"),
-			wantErr: "test error",
+			conn:    NewFakeConn(writeError),
+			wantErr: writeError,
 		},
 	}
 
 	for id, tc := range cases {
-		// Set up a new test client.
-		c := signalr.New("", "", "", "", nil)
+		tc := tc
 
-		// Set up a fake connection, if one has been created.
-		if tc.conn != nil {
-			tc.conn.err = tc.err
-			c.SetConn(tc.conn)
-		}
+		t.Run(id, func(t *testing.T) {
+			// Set up a new test client.
+			c := signalr.New("", "", "", "", nil)
 
-		// Send the message.
-		data := hubs.ClientMsg{H: "test data 123"}
-		err := c.Send(data)
+			// Set up a fake connection, if one has been created.
+			if tc.conn != nil {
+				c.SetConn(tc.conn)
+			}
 
-		// Check the results.
-		if tc.wantErr != "" {
-			errMatches(t, id, err, tc.wantErr)
-		} else {
-			equals(t, id, data, tc.conn.data)
-			ok(t, id, err)
-		}
+			// Send the message.
+			data := hubs.ClientMsg{H: "test data 123"}
+			err := c.Send(data)
+
+			// Check the results.
+			if tc.wantErr != nil {
+				errMatches(t, tc.wantErr, err)
+			} else {
+				equals(t, data, tc.conn.data)
+				ok(t, err)
+			}
+		})
 	}
 }
 
@@ -1031,16 +1099,16 @@ func TestNew(t *testing.T) {
 	c := signalr.New(host, protocol, endpoint, connectionData, params)
 
 	// Validate values were set up properly.
-	equals(t, "host", host, c.Host)
-	equals(t, "protocol", protocol, c.Protocol)
-	equals(t, "endpoint", endpoint, c.Endpoint)
-	equals(t, "connection data", connectionData, c.ConnectionData)
-	notNil(t, "http client", c.HTTPClient)
-	notNil(t, "http client transport", c.HTTPClient.Transport)
-	equals(t, "scheme", signalr.HTTPS, c.Scheme)
-	equals(t, "max negotiate retries", 5, c.MaxNegotiateRetries)
-	equals(t, "max connect retries", 5, c.MaxConnectRetries)
-	equals(t, "max reconnect retries", 5, c.MaxReconnectRetries)
-	equals(t, "max start retries", 5, c.MaxStartRetries)
-	equals(t, "retry wait duration", 1*time.Minute, c.RetryWaitDuration)
+	equals(t, host, c.Host)
+	equals(t, protocol, c.Protocol)
+	equals(t, endpoint, c.Endpoint)
+	equals(t, connectionData, c.ConnectionData)
+	notNil(t, c.HTTPClient)
+	notNil(t, c.HTTPClient.Transport)
+	equals(t, signalr.HTTPS, c.Scheme)
+	equals(t, 5, c.MaxNegotiateRetries)
+	equals(t, 5, c.MaxConnectRetries)
+	equals(t, 5, c.MaxReconnectRetries)
+	equals(t, 5, c.MaxStartRetries)
+	equals(t, 1*time.Minute, c.RetryWaitDuration)
 }

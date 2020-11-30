@@ -6,8 +6,7 @@ package hubs
 
 import (
 	"encoding/json"
-
-	"github.com/pkg/errors"
+	"errors"
 )
 
 // ClientMsg represents a message sent to the Hubs API from the client.

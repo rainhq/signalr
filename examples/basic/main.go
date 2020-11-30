@@ -1,9 +1,10 @@
 package main
 
 import (
+	"context"
 	"log"
 
-	"github.com/carterjones/signalr"
+	"github.com/rainhq/signalr/v2"
 )
 
 func main() {
@@ -17,16 +18,15 @@ func main() {
 	)
 
 	// Define message and error handlers.
-	msgHandler := func(msg signalr.Message) { log.Println(msg) }
-	panicIfErr := func(err error) {
-		if err != nil {
-			log.Panic(err)
-		}
+	msgHandler := func(_ context.Context, msg signalr.Message) error {
+		log.Println(msg)
+		return nil
 	}
 
 	// Start the connection.
-	err := c.Run(msgHandler, panicIfErr)
-	panicIfErr(err)
+	if err := c.Run(context.Background(), msgHandler); err != nil {
+		log.Fatal(err)
+	}
 
 	// Wait indefinitely.
 	select {}

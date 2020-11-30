@@ -1,7 +1,0 @@
-{
-    "files.exclude": {
-        "**/*.txt": true,
-        "**/*.out": true
-    },
-    "go.inferGopath": false
-}

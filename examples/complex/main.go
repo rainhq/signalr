@@ -1,9 +1,10 @@
 package main
 
 import (
+	"context"
 	"log"
 
-	"github.com/carterjones/signalr"
+	"github.com/rainhq/signalr/v2"
 )
 
 func main() {
@@ -20,24 +21,29 @@ func main() {
 	// all the available options that are exposed via public fields.
 
 	// Define message and error handlers.
-	msgHandler := func(msg signalr.Message) { log.Println(msg) }
-	panicIfErr := func(err error) {
-		if err != nil {
-			log.Panic(err)
-		}
+	msgHandler := func(_ context.Context, msg signalr.Message) error {
+		log.Println(msg)
+		return nil
 	}
 
+	ctx := context.Background()
+
 	// Manually perform the initialization routine.
-	err := c.Negotiate()
-	panicIfErr(err)
-	conn, err := c.Connect()
-	panicIfErr(err)
-	err = c.Start(conn)
-	panicIfErr(err)
+	if err := c.Negotiate(ctx); err != nil {
+		log.Fatal(err)
+	}
+
+	conn, err := c.Connect(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := c.Start(ctx, conn); err != nil {
+		log.Fatal(err)
+	}
 
 	// Begin the message reading loop.
-	go c.ReadMessages(msgHandler, panicIfErr)
-
-	// Wait indefinitely.
-	select {}
+	if err := c.ReadMessages(ctx, msgHandler); err != nil {
+		log.Fatal(err)
+	}
 }

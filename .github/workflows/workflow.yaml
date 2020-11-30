@@ -1,0 +1,39 @@
+name: Signalr client libraries
+on:
+  - push
+  - pull_request
+jobs:
+  build:
+    runs-on: ubuntu-18.04
+    strategy:
+      fail-fast: false
+      matrix:
+        go:
+          - "1.15"
+    name: Go ${{ matrix.go }}
+    env:
+      GOLANGCILINT_CONCURRENCY: "4"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          submodules: "true"
+      - name: Setup go
+        uses: actions/setup-go@v1
+        with:
+          go-version: ${{ matrix.go }}
+      - name: Setup cache
+        uses: actions/cache@v2
+        with:
+          path: |
+            ~/go/pkg/mod
+            bin/
+          key: ${{ runner.os }}-go-${{ matrix.go }}-${{ hashFiles('**/go.sum', 'Makefile') }}
+      - name: Download dependencies
+        run: make deps
+      - name: Ensure code is formatted
+        run: make format && make git-dirty
+      - name: Lint
+        run: make lint
+      - name: Unit test with coverage
+        run: make test-coverage

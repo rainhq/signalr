@@ -3,6 +3,7 @@ module github.com/rainhq/signalr/v2
 go 1.15
 
 require (
+	github.com/cenkalti/backoff/v4 v4.1.0
 	github.com/google/go-cmp v0.5.4
 	github.com/gorilla/websocket v1.4.2
 	go.uber.org/atomic v1.7.0

@@ -5,7 +5,7 @@ run:
 
 issues:
   exclude-rules:
-    - text: declaration of "err" shadows declaration
+    - text: declaration of "(err|ctx)" shadows declaration
       linters:
         - govet
 

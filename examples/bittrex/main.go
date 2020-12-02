@@ -13,28 +13,33 @@ import (
 // https://github.com/carterjones/bittrex.
 
 func main() {
-	// Prepare a SignalR client.
-	c := signalr.New(
-		"socket.bittrex.com",
-		"1.5",
-		"/signalr",
-		`[{"name":"c2"}]`,
-		nil,
-	)
+	ctx := context.Background()
 
-	// Define message and error handlers.
-	msgHandler := func(_ context.Context, msg signalr.Message) error {
-		log.Println(msg)
-		return nil
+	// Prepare a SignalR client.
+	c, err := signalr.Dial(
+		ctx,
+		"https://socket.bittrex.com/signalr",
+		`[{"name":"c2"}]`,
+	)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	ctx := context.Background()
 	errg, ctx := errgroup.WithContext(ctx)
 
-	errg.Go(func() error { return c.Run(ctx, msgHandler) })
+	errg.Go(func() error {
+		var msg signalr.Message
+		for {
+			if err := c.ReadMessage(ctx, &msg); err != nil {
+				return err
+			}
+
+			log.Println(msg)
+		}
+	})
 	errg.Go(func() error {
 		// Subscribe to the USDT-BTC feed.
-		return c.Send(hubs.ClientMsg{
+		return c.WriteMessage(hubs.ClientMsg{
 			H: "corehub",
 			M: "SubscribeToExchangeDeltas",
 			A: []interface{}{"USDT-BTC"},

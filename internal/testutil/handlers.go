@@ -1,40 +1,21 @@
 package testutil
 
 import (
-	"crypto/x509"
+	"encoding/json"
 	"log"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 
 	"github.com/gorilla/websocket"
+	"github.com/rainhq/signalr/v2/internal/model"
 	"golang.org/x/sync/errgroup"
 )
 
-func NewTestServer(fn http.Handler, tls bool) *httptest.Server {
-	if fn == nil {
-		fn = http.HandlerFunc(DefaultHandler)
-	}
-
-	var ts *httptest.Server
-	if tls {
-		// Create the server.
-		ts = httptest.NewTLSServer(fn)
-
-		// Save the testing certificate to the TLS client config.
-		//
-		// I'm not sure why ts.TLS doesn't contain certificate information.
-		// However, this seems to make the testing TLS certificate be trusted by
-		// the client.
-		ts.TLS.RootCAs = x509.NewCertPool()
-		ts.TLS.RootCAs.AddCert(ts.Certificate())
-	} else {
-		// Create the server.
-		ts = httptest.NewServer(fn)
-	}
-
-	return ts
-}
+var (
+	ConnectionToken = "hello world"
+	ConnectionID    = "ConnectionId"
+	ProtocolVersion = "1337"
+)
 
 func DefaultHandler(w http.ResponseWriter, r *http.Request) {
 	switch {
@@ -70,9 +51,16 @@ func TestCompleteHandler(w http.ResponseWriter, r *http.Request) {
 //
 // If an error occurs while writing the response data, it will panic.
 func TestNegotiate(w http.ResponseWriter, r *http.Request) {
-	// nolint:lll
-	_, err := w.Write([]byte(`{"ConnectionToken":"hello world","ConnectionId":"1234-ABC","URL":"/signalr","ProtocolVersion":"1337"}`))
+	data, err := json.Marshal(model.NegotiateResponse{
+		ConnectionToken: ConnectionToken,
+		ConnectionID:    ConnectionID,
+		ProtocolVersion: ProtocolVersion,
+	})
 	if err != nil {
+		log.Fatal(err)
+	}
+
+	if _, err := w.Write(data); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -117,6 +105,7 @@ func TestConnect(w http.ResponseWriter, req *http.Request) {
 
 	if err := errg.Wait(); err != nil {
 		log.Print(err)
+		w.WriteHeader(http.StatusInternalServerError)
 	}
 }
 
@@ -130,8 +119,14 @@ func TestReconnect(w http.ResponseWriter, r *http.Request) {
 //
 // If an error occurs while writing the response data, it will panic.
 func TestStart(w http.ResponseWriter, r *http.Request) {
-	_, err := w.Write([]byte(`{"Response":"started"}`))
+	data, err := json.Marshal(model.StartResponse{
+		Response: "started",
+	})
 	if err != nil {
-		panic(err)
+		log.Fatal(err)
+	}
+
+	if _, err := w.Write(data); err != nil {
+		log.Fatal(err)
 	}
 }

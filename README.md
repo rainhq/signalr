@@ -20,25 +20,25 @@ import (
 )
 
 func main() {
-	c := signalr.New(
-		"fake-server.definitely-not-real",
-		"1.5",
-		"/signalr",
-		`[{"name":"awesomehub"}]`,
-		nil,
-	)
-
-	// Define handlers.
-	msgHandler := func(_ context.Context, msg signalr.Message) error {
-		log.Println(msg)
-		return nil
-	}
-
 	ctx := context.Background()
 
-	// Start the run loop.
-	if err := c.Run(ctx, msgHandler); err != nil {
+	// Prepare a SignalR client.
+	c, err := signalr.Dial(
+		ctx,
+		"https://fake-server.definitely-not-real/signalr",
+		`[{"name":"awesomehub"}]`,
+	)
+	if err != nil {
 		log.Fatal(err)
+	}
+
+	var msg signalr.Message
+	for {
+		if err := c.ReadMessage(ctx, &msg); err != nil {
+			log.Fatal(err)
+		}
+
+		log.Println(msg)
 	}
 }
 ```

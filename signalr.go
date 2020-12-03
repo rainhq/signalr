@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"math/big"
 	"net/http"
 	"net/http/cookiejar"
@@ -15,8 +15,6 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/gorilla/websocket"
-	"github.com/rainhq/signalr/v2/hubs"
-	"github.com/rainhq/signalr/v2/internal/model"
 )
 
 // Client represents a SignlR client. It manages connections so that the caller
@@ -60,7 +58,7 @@ func Dial(ctx context.Context, endpoint, cdata string, opts ...Opt) (*Client, er
 
 	dialer := cfg.Dialer(client)
 
-	conn, err := connect(ctx, dialer, endpoint, cfg.Headers, &state, cfg.ConnectBackoff())
+	conn, err := connect(ctx, dialer, endpoint, "connect", cfg.Headers, &state, cfg.ConnectBackoff())
 	if err != nil {
 		return nil, &ConnectError{cause: err}
 	}
@@ -99,34 +97,43 @@ func (c *Client) ReadMessage(ctx context.Context, msg *Message) error {
 	defer c.mtx.Unlock()
 
 	err := readMessage(c.conn, msg, c.state)
-
-	if websocket.IsCloseError(err, 1000, 1001, 1006) {
-		ctx, cancel := context.WithTimeout(ctx, c.config.MaxReconnectDuration)
+	switch {
+	case websocket.IsCloseError(err, 1000, 1001, 1006):
+		dctx, cancel := context.WithTimeout(ctx, c.config.MaxReconnectDuration)
 		defer cancel()
 
-		conn, err := reconnect(ctx, c.dialer, c.endpoint, c.config.Headers, c.state, c.config.ReconnectBackoff())
+		conn, err := connect(dctx, c.dialer, c.endpoint, "reconnect", c.config.Headers, c.state, c.config.ReconnectBackoff())
 		if err != nil {
-			return ConnectError{cause: err}
+			return &ConnectError{cause: err}
 		}
 
 		c.conn = conn
+	case err != nil:
+		return &ReadError{cause: err}
 	}
 
 	return nil
 }
 
 // Send sends a message to the websocket connection.
-func (c *Client) WriteMessage(m hubs.ClientMsg) error {
+func (c *Client) WriteMessage(m ClientMsg) error {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
-	// Write the message.
-	err := c.conn.WriteJSON(m)
+	data, err := json.Marshal(m)
 	if err != nil {
-		return err
+		return &WriteError{cause: err}
+	}
+
+	if err := c.conn.WriteMessage(textMessage, data); err != nil {
+		return &WriteError{cause: err}
 	}
 
 	return nil
+}
+
+func (c *Client) Close() error {
+	return c.conn.Close()
 }
 
 // negotiate implements the negotiate step of the SignalR connection sequence.
@@ -162,28 +169,24 @@ func negotiate(ctx context.Context, client *http.Client, endpoint string, header
 			return fmt.Errorf("read failed: %w", err)
 		}
 
-		return processNegotiateResponse(data, state)
+		var res negotiateResponse
+		if err := json.Unmarshal(data, &res); err != nil {
+			return err
+		}
+
+		// Set the connection token and ID.
+		state.ConnectionToken = res.ConnectionToken
+		state.ConnectionID = res.ConnectionID
+
+		// Update the protocol version.
+		state.Protocol = res.ProtocolVersion
+
+		return nil
 	}, backoff.WithContext(bo, ctx))
 }
 
-func processNegotiateResponse(data []byte, state *State) error {
-	var res model.NegotiateResponse
-	if err := json.Unmarshal(data, &res); err != nil {
-		return err
-	}
-
-	// Set the connection token and ID.
-	state.ConnectionToken = res.ConnectionToken
-	state.ConnectionID = res.ConnectionID
-
-	// Update the protocol version.
-	state.Protocol = res.ProtocolVersion
-
-	return nil
-}
-
 // connect implements the connect step of the SignalR connection sequence.
-func connect(ctx context.Context, dialer WebsocketDialer, endpoint string, headers http.Header, state *State, bo backoff.BackOff) (WebsocketConn, error) {
+func connect(ctx context.Context, dialer WebsocketDialer, endpoint, command string, headers http.Header, state *State, bo backoff.BackOff) (WebsocketConn, error) {
 	// Example connect URL:
 	// https://socket.bittrex.com/signalr/connect?
 	//   transport=webSockets&
@@ -192,53 +195,24 @@ func connect(ctx context.Context, dialer WebsocketDialer, endpoint string, heade
 	//   connectionData=%5B%7B%22name%22%3A%22corehub%22%7D%5D&
 	//   tid=5
 	// -> returns connection ID. (e.g.: d-F2577E41-B,0|If60z,0|If600,1)
-	endpoint, err := makeURL(endpoint, "connect", state)
+	endpoint, err := makeURL(endpoint, command, state)
 	if err != nil {
 		return nil, err
 	}
 
-	bo = backoff.WithContext(bo, ctx)
-
-	// Perform the connection.
-	conn, err := xconnect(ctx, dialer, endpoint, headers, bo)
-	if err != nil {
-		return nil, err
-	}
-
-	return conn, nil
-}
-
-func reconnect(ctx context.Context, dialer WebsocketDialer, endpoint string, headers http.Header, state *State, bo backoff.BackOff) (WebsocketConn, error) {
-	endpoint, err := makeURL(endpoint, "reconnect", state)
-	if err != nil {
-		return nil, err
-	}
-
-	// Perform the reconnection.
-	conn, err := xconnect(ctx, dialer, endpoint, headers, bo)
-	if err != nil {
-		return nil, err
-	}
-
-	return conn, nil
-}
-
-func xconnect(ctx context.Context, dialer WebsocketDialer, endpoint string, headers http.Header, bo backoff.BackOff) (WebsocketConn, error) {
 	var conn WebsocketConn
-	err := backoff.Retry(func() error {
+	err = backoff.Retry(func() error {
 		var (
 			status int
 			err    error
 		)
 		conn, status, err = dialer.Dial(ctx, endpoint, headers)
-		switch {
-		case status >= http.StatusOK:
-			return fmt.Errorf("dial failed (%d): %w", status, err)
-		case !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded):
-			return fmt.Errorf("dial failed: %w", err)
-		default:
-			return err
+		if err != nil {
+			log.Printf("%+v", err)
+			return &DialError{status: status, cause: err}
 		}
+
+		return nil
 	}, backoff.WithContext(bo, ctx))
 
 	return conn, err
@@ -269,30 +243,26 @@ func start(ctx context.Context, client *http.Client, conn WebsocketConn, endpoin
 			return fmt.Errorf("read failed: %w", err)
 		}
 
-		return processStartResponse(data, conn, state)
+		var res startResponse
+		if err := json.Unmarshal(data, &res); err != nil {
+			return err
+		}
+
+		if res.Response != "started" {
+			return &InvalidStartResponseError{actual: res.Response}
+		}
+
+		var msg Message
+		if err := readMessage(conn, &msg, state); err != nil {
+			return &ReadError{cause: err}
+		}
+
+		if msg.S != statusStarted {
+			return &InvalidInitMessageError{actual: msg.S}
+		}
+
+		return nil
 	}, backoff.WithContext(bo, ctx))
-}
-
-func processStartResponse(data []byte, conn WebsocketConn, state *State) error {
-	var res model.StartResponse
-	if err := json.Unmarshal(data, &res); err != nil {
-		return err
-	}
-
-	if res.Response != "started" {
-		return fmt.Errorf("start response is not \"started\": %q", res.Response)
-	}
-
-	var msg Message
-	if err := readMessage(conn, &msg, state); err != nil {
-		return fmt.Errorf("failed to read message: %w", err)
-	}
-
-	if msg.S != 1 {
-		return fmt.Errorf("unexpected S value received from server: %d", msg.S)
-	}
-
-	return nil
 }
 
 type State struct {
@@ -355,7 +325,7 @@ func connectURL(u *url.URL) error {
 	case u.Scheme == "https":
 		u.Scheme = "wss"
 	case u.Scheme == "http":
-		u.Scheme = "http"
+		u.Scheme = "ws"
 	default:
 		return fmt.Errorf("invalid scheme %s", u.Scheme)
 	}

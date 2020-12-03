@@ -30,12 +30,9 @@ type WebsocketConn interface {
 	//  - any errors encountered during reading the message
 	ReadMessage() (messageType int, p []byte, err error)
 
-	// WriteJSON is modeled after the function defined at
-	// https://godoc.org/github.com/gorilla/websocket#Conn.WriteJSON
-	//
-	// At a high level, it writes a structure to the underlying websocket and
-	// returns any error that was encountered during the write operation.
-	WriteJSON(v interface{}) error
+	WriteMessage(messageType int, p []byte) error
+
+	Close() error
 }
 
 var (
@@ -69,5 +66,9 @@ func (d gorillaDialer) Dial(ctx context.Context, u string, headers http.Header) 
 	//nolint:bodyclose
 	conn, res, err := d.delegate.DialContext(ctx, u, headers)
 
-	return conn, res.StatusCode, err
+	if res != nil {
+		status = res.StatusCode
+	}
+
+	return conn, status, err
 }

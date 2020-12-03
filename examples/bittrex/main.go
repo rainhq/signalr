@@ -5,7 +5,6 @@ import (
 	"log"
 
 	"github.com/rainhq/signalr/v2"
-	"github.com/rainhq/signalr/v2/hubs"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -39,7 +38,7 @@ func main() {
 	})
 	errg.Go(func() error {
 		// Subscribe to the USDT-BTC feed.
-		return c.WriteMessage(hubs.ClientMsg{
+		return c.WriteMessage(signalr.ClientMsg{
 			H: "corehub",
 			M: "SubscribeToExchangeDeltas",
 			A: []interface{}{"USDT-BTC"},

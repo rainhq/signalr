@@ -1,6 +1,9 @@
 package signalr
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 type NegotiateError struct {
 	cause error
@@ -53,6 +56,34 @@ func (e *DialError) Error() string {
 
 func (e *DialError) Unwrap() error {
 	return e.cause
+}
+
+type CloseError struct {
+	code int
+	text string
+}
+
+func (e *CloseError) Error() string {
+	if e.text != "" {
+		return fmt.Sprintf("websocket closed %d: %s", e.code, e.text)
+	}
+
+	return fmt.Sprintf("websocket closed %d", e.code)
+}
+
+func IsCloseError(err error, codes ...int) bool {
+	closeErr := &CloseError{}
+	if !errors.As(err, &closeErr) {
+		return false
+	}
+
+	for _, code := range codes {
+		if closeErr.code == code {
+			return true
+		}
+	}
+
+	return false
 }
 
 type ReadError struct {

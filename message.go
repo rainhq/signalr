@@ -11,7 +11,7 @@ var (
 	statusStarted = 1
 )
 
-// Message represents a message sent from the sserver to the persistent websocket
+// Message represents a message sent from the server to the persistent websocket
 // connection.
 type Message struct {
 	// message id, present for all non-KeepAlive messages
@@ -121,7 +121,6 @@ func readMessage(conn WebsocketConn, msg *Message, state *State) error {
 		return fmt.Errorf("message read failed: %w", err)
 	}
 
-	// Verify the correct response type was received.
 	if t != textMessage {
 		return fmt.Errorf("unexpected websocket control type: %d", t)
 	}

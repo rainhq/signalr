@@ -54,6 +54,12 @@ func MaxConnectRetries(retries int) Opt {
 	}
 }
 
+func MaxReconnectRetries(retries int) Opt {
+	return func(c *config) {
+		c.MaxReconnectRetries = retries
+	}
+}
+
 // The maximum number of times to re-attempt a start command.
 func MaxStartRetries(retries int) Opt {
 	return func(c *config) {
@@ -63,7 +69,7 @@ func MaxStartRetries(retries int) Opt {
 
 // The time to wait before retrying, in the event that an error occurs
 // when contacting the SignalR service.
-func RetrInterval(interval time.Duration) Opt {
+func RetryInterval(interval time.Duration) Opt {
 	return func(c *config) {
 		c.RetryInterval = interval
 	}
@@ -108,7 +114,7 @@ func (c config) StartBackoff() backoff.BackOff {
 
 var defaultConfig = config{
 	Client:               http.DefaultClient,
-	Dialer:               NewGorillaDialer,
+	Dialer:               NewDefaultDialer,
 	Protocol:             "1.5",
 	Params:               make(url.Values),
 	Headers:              make(http.Header),
@@ -117,7 +123,7 @@ var defaultConfig = config{
 	MaxReconnectRetries:  5,
 	MaxReconnectDuration: 5 * time.Minute,
 	MaxStartRetries:      5,
-	RetryInterval:        1 * time.Minute,
+	RetryInterval:        1 * time.Second,
 }
 
 func constantBackoff(interval time.Duration, maxRetries int) backoff.BackOff {

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"math/big"
 	"net/http"
 	"net/http/cookiejar"
@@ -14,7 +13,6 @@ import (
 	"sync"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/gorilla/websocket"
 )
 
 // Client represents a SignlR client. It manages connections so that the caller
@@ -98,7 +96,7 @@ func (c *Client) ReadMessage(ctx context.Context, msg *Message) error {
 
 	err := readMessage(c.conn, msg, c.state)
 	switch {
-	case websocket.IsCloseError(err, 1000, 1001, 1006):
+	case IsCloseError(err, 1000, 1001, 1006):
 		dctx, cancel := context.WithTimeout(ctx, c.config.MaxReconnectDuration)
 		defer cancel()
 
@@ -208,7 +206,6 @@ func connect(ctx context.Context, dialer WebsocketDialer, endpoint, command stri
 		)
 		conn, status, err = dialer.Dial(ctx, endpoint, headers)
 		if err != nil {
-			log.Printf("%+v", err)
 			return &DialError{status: status, cause: err}
 		}
 
@@ -294,14 +291,10 @@ func makeURL(endpoint, command string, state *State) (string, error) {
 	case "negotiate":
 		u.Path += "/negotiate"
 	case "connect":
-		if err := connectURL(u); err != nil {
-			return "", err
-		}
+		connectURL(u)
 		u.Path += "/connect"
 	case "reconnect":
-		if err := connectURL(u); err != nil {
-			return "", err
-		}
+		connectURL(u)
 		if groupsToken := state.GroupsToken; groupsToken != "" {
 			query.Set("groupsToken", groupsToken)
 		}
@@ -320,14 +313,12 @@ func makeURL(endpoint, command string, state *State) (string, error) {
 	return u.String(), nil
 }
 
-func connectURL(u *url.URL) error {
+func connectURL(u *url.URL) {
 	switch {
 	case u.Scheme == "https":
 		u.Scheme = "wss"
 	case u.Scheme == "http":
 		u.Scheme = "ws"
-	default:
-		return fmt.Errorf("invalid scheme %s", u.Scheme)
 	}
 
 	query := u.Query()
@@ -335,8 +326,6 @@ func connectURL(u *url.URL) error {
 	query.Set("transport", "webSockets")
 	tid, _ := rand.Int(rand.Reader, big.NewInt(1000000))
 	query.Set("tid", tid.String())
-
-	return nil
 }
 
 func prepareRequest(ctx context.Context, u string, headers http.Header) (*http.Request, error) {

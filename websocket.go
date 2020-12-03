@@ -3,10 +3,11 @@ package signalr
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net/http"
 	"net/url"
 
-	gorilla_websocket "github.com/gorilla/websocket"
+	"github.com/gorilla/websocket"
 )
 
 type ProxyFunc func(req *http.Request) (*url.URL, error)
@@ -36,15 +37,16 @@ type WebsocketConn interface {
 }
 
 var (
-	_ WebsocketDialer     = &gorillaDialer{}
-	_ WebsocketDialerFunc = NewGorillaDialer
+	_ WebsocketDialerFunc = NewDefaultDialer
+	_ WebsocketDialer     = &defaultDialer{}
+	_ WebsocketConn       = &defaultConn{}
 )
 
-type gorillaDialer struct {
-	delegate gorilla_websocket.Dialer
+type defaultDialer struct {
+	websocket.Dialer
 }
 
-func NewGorillaDialer(client *http.Client) WebsocketDialer {
+func NewDefaultDialer(client *http.Client) WebsocketDialer {
 	proxy := http.ProxyFromEnvironment
 	var tlsConfig *tls.Config
 
@@ -53,8 +55,8 @@ func NewGorillaDialer(client *http.Client) WebsocketDialer {
 		tlsConfig = t.TLSClientConfig
 	}
 
-	return gorillaDialer{
-		delegate: gorilla_websocket.Dialer{
+	return defaultDialer{
+		Dialer: websocket.Dialer{
 			TLSClientConfig: tlsConfig,
 			Proxy:           proxy,
 			Jar:             client.Jar,
@@ -62,13 +64,28 @@ func NewGorillaDialer(client *http.Client) WebsocketDialer {
 	}
 }
 
-func (d gorillaDialer) Dial(ctx context.Context, u string, headers http.Header) (conn WebsocketConn, status int, err error) {
+func (d defaultDialer) Dial(ctx context.Context, u string, headers http.Header) (conn WebsocketConn, status int, err error) {
 	//nolint:bodyclose
-	conn, res, err := d.delegate.DialContext(ctx, u, headers)
+	conn, res, err := d.DialContext(ctx, u, headers)
 
 	if res != nil {
 		status = res.StatusCode
 	}
 
 	return conn, status, err
+}
+
+type defaultConn struct {
+	websocket.Conn
+}
+
+func (c *defaultConn) ReadMessage() (messageType int, p []byte, err error) {
+	messageType, p, err = c.Conn.ReadMessage()
+
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		return messageType, p, &CloseError{code: closeErr.Code, text: closeErr.Text}
+	}
+
+	return messageType, p, err
 }

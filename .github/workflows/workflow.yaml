@@ -31,8 +31,6 @@ jobs:
           key: ${{ runner.os }}-go-${{ matrix.go }}-${{ hashFiles('**/go.sum', 'Makefile') }}
       - name: Download dependencies
         run: make deps
-      - name: Ensure code is formatted
-        run: make format && make git-dirty
       - name: Lint
         run: make lint
       - name: Unit test with coverage

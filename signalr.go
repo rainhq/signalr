@@ -27,6 +27,15 @@ type Client struct {
 	state    *State
 }
 
+type State struct {
+	ConnectionData  string
+	ConnectionID    string
+	ConnectionToken string
+	GroupsToken     string
+	MessageID       string
+	Protocol        string
+}
+
 // Dial connects to Signalr endpoint
 func Dial(ctx context.Context, endpoint, cdata string, opts ...Opt) (*Client, error) {
 	cfg := defaultConfig
@@ -260,15 +269,6 @@ func start(ctx context.Context, client *http.Client, conn WebsocketConn, endpoin
 
 		return nil
 	}, backoff.WithContext(bo, ctx))
-}
-
-type State struct {
-	ConnectionData  string
-	ConnectionID    string
-	ConnectionToken string
-	GroupsToken     string
-	MessageID       string
-	Protocol        string
 }
 
 func makeURL(endpoint, command string, state *State) (string, error) {

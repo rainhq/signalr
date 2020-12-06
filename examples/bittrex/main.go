@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 
 	"github.com/rainhq/signalr/v2"
@@ -39,9 +40,9 @@ func main() {
 	errg.Go(func() error {
 		// Subscribe to the USDT-BTC feed.
 		return c.WriteMessage(ctx, signalr.ClientMsg{
-			H: "corehub",
+			H: "c2",
 			M: "SubscribeToExchangeDeltas",
-			A: []interface{}{"USDT-BTC"},
+			A: []json.RawMessage{[]byte("USDT-BTC")},
 			I: 1,
 		})
 	})

@@ -78,12 +78,14 @@ type defaultConn struct {
 func (c *defaultConn) ReadMessage(ctx context.Context) (messageType int, p []byte, err error) {
 	select {
 	case <-ctx.Done():
-		return 0, nil, ctx.Err()
+		return -1, nil, ctx.Err()
 	default:
 	}
 
 	deadline, _ := ctx.Deadline()
-	c.Conn.SetReadDeadline(deadline)
+	if err := c.Conn.SetReadDeadline(deadline); err != nil {
+		return -1, nil, err
+	}
 
 	messageType, p, err = c.Conn.ReadMessage()
 
@@ -97,7 +99,9 @@ func (c *defaultConn) ReadMessage(ctx context.Context) (messageType int, p []byt
 
 func (c *defaultConn) WriteMessage(ctx context.Context, messageType int, p []byte) error {
 	deadline, _ := ctx.Deadline()
-	c.Conn.SetWriteDeadline(deadline)
+	if err := c.Conn.SetWriteDeadline(deadline); err != nil {
+		return err
+	}
 
 	return c.Conn.WriteMessage(messageType, p)
 }

@@ -3,7 +3,6 @@ package signalr
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 )
 
@@ -49,43 +48,10 @@ type ClientMsg struct {
 
 	// arguments (an array, can be empty if the method does not have any
 	// parameters)
-	A []interface{}
+	A []json.RawMessage
 
 	// state – a dictionary containing additional custom data (optional)
 	S *json.RawMessage `json:",omitempty"`
-}
-
-// MarshalJSON converts the current message into a JSON-formatted byte array. It
-// will perform different types of conversion based on the Golang type of the
-// "A" field. For instance, an array will be converted into a JSON object
-// looking like [...], whereas a byte array would look like "...".
-func (cm *ClientMsg) MarshalJSON() (buf []byte, err error) {
-	var args []byte
-	for _, a := range cm.A {
-		switch a := a.(type) {
-		case []byte:
-			args = append(args, a...)
-		case string:
-			args = append(args, a...)
-		default:
-			err = errors.New("unsupported argument type")
-			return
-		}
-	}
-
-	return json.Marshal(&struct {
-		I int
-		H string
-		M string
-		A []byte
-		S *json.RawMessage `json:"omitempty"`
-	}{
-		I: cm.I,
-		H: cm.H,
-		M: cm.M,
-		A: args,
-		S: cm.S,
-	})
 }
 
 // ServerMsg represents a message sent to the Hubs API from the server.

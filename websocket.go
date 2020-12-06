@@ -64,19 +64,24 @@ func NewDefaultDialer(client *http.Client) WebsocketDialer {
 	}
 }
 
-func (d defaultDialer) Dial(ctx context.Context, u string, headers http.Header) (conn WebsocketConn, status int, err error) {
+func (d defaultDialer) Dial(ctx context.Context, u string, headers http.Header) (WebsocketConn, int, error) {
 	//nolint:bodyclose
 	conn, res, err := d.DialContext(ctx, u, headers)
 
+	var status int
 	if res != nil {
 		status = res.StatusCode
 	}
 
-	return conn, status, err
+	if err != nil {
+		return nil, status, err
+	}
+
+	return &defaultConn{Conn: conn}, status, err
 }
 
 type defaultConn struct {
-	websocket.Conn
+	*websocket.Conn
 }
 
 func (c *defaultConn) ReadMessage() (messageType int, p []byte, err error) {

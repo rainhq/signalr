@@ -93,6 +93,13 @@ func TestClient(t *testing.T) {
 				return
 			}
 
+			t.Cleanup(func() {
+				err := c.Close()
+				if err != nil {
+					t.Errorf("close failed: %v", err)
+				}
+			})
+
 			expectState(t, State{
 				ConnectionData:  connectionData,
 				ConnectionToken: connectionToken,
@@ -120,42 +127,58 @@ func TestClient(t *testing.T) {
 func TestReadMessage(t *testing.T) {
 	t.Parallel()
 
-	initMessage := readMessageResult{msgType: 1, msg: `{"S":1}`}
+	initMessage := readResult{msg: `{"S":1}`}
 
 	cases := []struct {
 		name        string
-		readResult  readMessageResult
+		dialResults []dialResult
+		readResults []readResult
 		retries     int
 		expectedMsg Message
 		expectedErr error
 	}{
 		{
 			name:        "normal message",
-			readResult:  readMessageResult{msg: `{"C":"test message"}`},
+			readResults: []readResult{{msg: `{"C":"test message"}`}},
 			expectedMsg: Message{C: "test message"},
 		},
 		{
 			name:        "groups token",
-			readResult:  readMessageResult{msg: `{"C":"test message","G":"custom-groups-token"}`},
+			readResults: []readResult{{msg: `{"C":"test message","G":"custom-groups-token"}`}},
 			expectedMsg: Message{C: "test message", G: "custom-groups-token"},
 		},
 		{
+			name: "recover after websocket closed",
+			readResults: []readResult{
+				{err: &CloseError{code: 1001}},
+				{msg: `{"C":"test message"}`},
+			},
+			expectedMsg: Message{C: "test message"},
+		},
+		{
+			name: "reconnect failed",
+			readResults: []readResult{
+				{err: &CloseError{code: 1001}},
+				{msg: `{"C":"test message"}`},
+			},
+			dialResults: []dialResult{
+				{err: io.EOF},
+			},
+			expectedErr: &ConnectError{},
+		},
+		{
 			name:        "read failed",
-			readResult:  readMessageResult{err: io.EOF},
+			readResults: []readResult{{err: io.EOF}},
 			expectedErr: &ReadError{},
 		},
 		{
-			name:       "websocket closed",
-			readResult: readMessageResult{err: &CloseError{code: 1001}},
-		},
-		{
 			name:        "empty message",
-			readResult:  readMessageResult{msg: ""},
+			readResults: []readResult{{msg: ""}},
 			expectedErr: &json.SyntaxError{},
 		},
 		{
 			name:        "bad json",
-			readResult:  readMessageResult{msg: "{invalid json"},
+			readResults: []readResult{{msg: "{invalid json"}},
 			expectedErr: &json.SyntaxError{},
 		},
 	}
@@ -167,9 +190,12 @@ func TestReadMessage(t *testing.T) {
 			ts := httptest.NewServer(wrapHandler(t, newRootHandler()))
 			t.Cleanup(ts.Close)
 
-			conn := &fakeConn{results: []readMessageResult{initMessage, tc.readResult}}
+			readResults := append([]readResult{initMessage}, tc.readResults...)
+			conn := &fakeConn{results: readResults}
+
+			dialResults := append([]dialResult{{conn: conn}}, tc.dialResults...)
 			dialer := func(*http.Client) WebsocketDialer {
-				return &mockDialer{conn: conn}
+				return &mockDialer{conn: conn, results: dialResults}
 			}
 
 			ctx := context.Background()
@@ -207,6 +233,7 @@ func TestNegotiate(t *testing.T) {
 	cases := []struct {
 		name        string
 		endpoint    string
+		retries     int
 		handler     testHandlerFunc
 		headers     http.Header
 		expectedErr error
@@ -217,6 +244,7 @@ func TestNegotiate(t *testing.T) {
 		{
 			name:    "recover after failure",
 			handler: errorResponseOnce(503),
+			retries: 1,
 		},
 		{
 			name:        "invalid scheme",
@@ -266,7 +294,7 @@ func TestNegotiate(t *testing.T) {
 				Protocol:       protocolVersion,
 			}
 
-			bo := backoff.WithMaxRetries(backoff.NewConstantBackOff(retryInterval), 5)
+			bo := backoff.WithMaxRetries(backoff.NewConstantBackOff(retryInterval), uint64(tc.retries))
 			err := negotiate(ctx, ts.Client(), endpoint, tc.headers, &state, bo)
 
 			if tc.expectedErr != nil {
@@ -352,12 +380,12 @@ func TestStart(t *testing.T) {
 	t.Parallel()
 
 	headers := make(http.Header)
-	initMessage := readMessageResult{msgType: 1, msg: `{"S":1}`}
+	initMessage := readResult{msgType: 1, msg: `{"S":1}`}
 
 	cases := []struct {
 		name        string
 		handler     testHandlerFunc
-		readResult  readMessageResult
+		readResult  readResult
 		retries     int
 		expectedErr error
 	}{
@@ -398,25 +426,25 @@ func TestStart(t *testing.T) {
 		},
 		{
 			name:        "read error",
-			readResult:  readMessageResult{err: io.EOF},
+			readResult:  readResult{err: io.EOF},
 			expectedErr: &ReadError{},
 		},
 		{
 			name:        "wrong message type",
 			handler:     response(`{"Response":"started"}`),
-			readResult:  readMessageResult{msgType: 9001},
+			readResult:  readResult{msgType: 9001},
 			expectedErr: &ReadError{},
 		},
 		{
 			name:        "message json unmarshal failure",
 			handler:     response(`{"Response":"started"}`),
-			readResult:  readMessageResult{msg: "invalid json"},
+			readResult:  readResult{msg: "invalid json"},
 			expectedErr: &json.SyntaxError{},
 		},
 		{
 			name:        "server not initialized",
 			handler:     response(`{"Response":"started"}`),
-			readResult:  readMessageResult{msg: `{"S":9002}`},
+			readResult:  readResult{msg: `{"S":9002}`},
 			expectedErr: &InvalidInitMessageError{},
 		},
 	}
@@ -437,7 +465,7 @@ func TestStart(t *testing.T) {
 			ts := httptest.NewServer(wrapHandler(t, handler))
 			t.Cleanup(ts.Close)
 
-			conn := &fakeConn{results: []readMessageResult{tc.readResult}}
+			conn := &fakeConn{results: []readResult{tc.readResult}}
 
 			state := State{
 				ConnectionData:  connectionData,
@@ -446,7 +474,7 @@ func TestStart(t *testing.T) {
 				Protocol:        protocolVersion,
 			}
 
-			bo := backoff.WithMaxRetries(backoff.NewConstantBackOff(retryInterval), 5)
+			bo := backoff.WithMaxRetries(backoff.NewConstantBackOff(retryInterval), uint64(tc.retries))
 			err := start(ctx, ts.Client(), conn, ts.URL, headers, &state, bo)
 
 			if tc.expectedErr != nil {
@@ -548,10 +576,10 @@ func (d *mockDialer) Dial(ctx context.Context, endpoint string, headers http.Hea
 
 type fakeConn struct {
 	msg     string
-	results []readMessageResult
+	results []readResult
 }
 
-type readMessageResult struct {
+type readResult struct {
 	msgType int
 	msg     string
 	err     error

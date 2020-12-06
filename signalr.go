@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"math/big"
@@ -93,6 +94,7 @@ func (c *Client) State() *State {
 	return &state
 }
 
+// ReadMessage reads single message from websocket
 func (c *Client) ReadMessage(ctx context.Context, msg *Message) error {
 	select {
 	case <-ctx.Done():
@@ -104,18 +106,23 @@ func (c *Client) ReadMessage(ctx context.Context, msg *Message) error {
 	defer c.mtx.Unlock()
 
 	err := readMessage(c.conn, msg, c.state)
-	switch {
-	case IsCloseError(err, 1000, 1001, 1006):
+	if IsCloseError(err, 1000, 1001, 1006) {
 		dctx, cancel := context.WithTimeout(ctx, c.config.MaxReconnectDuration)
 		defer cancel()
 
-		conn, err := connect(dctx, c.dialer, c.endpoint, "reconnect", c.config.Headers, c.state, c.config.ReconnectBackoff())
+		var conn WebsocketConn
+		conn, err = connect(dctx, c.dialer, c.endpoint, "reconnect", c.config.Headers, c.state, c.config.ReconnectBackoff())
 		if err != nil {
 			return &ConnectError{cause: err}
 		}
 
 		c.conn = conn
-	case err != nil:
+
+		// read message again
+		err = readMessage(conn, msg, c.state)
+	}
+
+	if err != nil {
 		return &ReadError{cause: err}
 	}
 
@@ -139,6 +146,7 @@ func (c *Client) WriteMessage(m ClientMsg) error {
 	return nil
 }
 
+// Close closes underlying websocket connection
 func (c *Client) Close() error {
 	return c.conn.Close()
 }
@@ -275,6 +283,14 @@ func makeURL(endpoint, command string, state *State) (string, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return "", err
+	}
+
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", &url.Error{
+			Op:  "Get",
+			URL: endpoint,
+			Err: errors.New("unsupported scheme"),
+		}
 	}
 
 	query := u.Query()

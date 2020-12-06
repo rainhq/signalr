@@ -96,16 +96,10 @@ func (c *Client) State() *State {
 
 // ReadMessage reads single message from websocket
 func (c *Client) ReadMessage(ctx context.Context, msg *Message) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	default:
-	}
-
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
-	err := readMessage(c.conn, msg, c.state)
+	err := readMessage(ctx, c.conn, msg, c.state)
 	if IsCloseError(err, 1000, 1001, 1006) {
 		dctx, cancel := context.WithTimeout(ctx, c.config.MaxReconnectDuration)
 		defer cancel()
@@ -119,7 +113,7 @@ func (c *Client) ReadMessage(ctx context.Context, msg *Message) error {
 		c.conn = conn
 
 		// read message again
-		err = readMessage(conn, msg, c.state)
+		err = readMessage(ctx, conn, msg, c.state)
 	}
 
 	if err != nil {
@@ -130,16 +124,16 @@ func (c *Client) ReadMessage(ctx context.Context, msg *Message) error {
 }
 
 // Send sends a message to the websocket connection.
-func (c *Client) WriteMessage(m ClientMsg) error {
+func (c *Client) WriteMessage(ctx context.Context, msg ClientMsg) error {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
-	data, err := json.Marshal(m)
+	data, err := json.Marshal(msg)
 	if err != nil {
 		return &WriteError{cause: err}
 	}
 
-	if err := c.conn.WriteMessage(textMessage, data); err != nil {
+	if err := c.conn.WriteMessage(ctx, textMessage, data); err != nil {
 		return &WriteError{cause: err}
 	}
 
@@ -267,7 +261,7 @@ func start(ctx context.Context, client *http.Client, conn WebsocketConn, endpoin
 		}
 
 		var msg Message
-		if err := readMessage(conn, &msg, state); err != nil {
+		if err := readMessage(ctx, conn, &msg, state); err != nil {
 			return &ReadError{cause: err}
 		}
 

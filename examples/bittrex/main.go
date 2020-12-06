@@ -38,7 +38,7 @@ func main() {
 	})
 	errg.Go(func() error {
 		// Subscribe to the USDT-BTC feed.
-		return c.WriteMessage(signalr.ClientMsg{
+		return c.WriteMessage(ctx, signalr.ClientMsg{
 			H: "corehub",
 			M: "SubscribeToExchangeDeltas",
 			A: []interface{}{"USDT-BTC"},

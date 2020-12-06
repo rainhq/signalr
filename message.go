@@ -1,6 +1,7 @@
 package signalr
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -115,8 +116,8 @@ type ServerMsg struct {
 	S *json.RawMessage `json:",omitempty"`
 }
 
-func readMessage(conn WebsocketConn, msg *Message, state *State) error {
-	t, p, err := conn.ReadMessage()
+func readMessage(ctx context.Context, conn WebsocketConn, msg *Message, state *State) error {
+	t, p, err := conn.ReadMessage(ctx)
 	if err != nil {
 		return fmt.Errorf("message read failed: %w", err)
 	}

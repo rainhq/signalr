@@ -22,17 +22,8 @@ type WebsocketDialer interface {
 // provide an interface to objects that can read from and write to a websocket
 // connection.
 type WebsocketConn interface {
-	// ReadMessage is modeled after the function defined at
-	// https://godoc.org/github.com/gorilla/websocket#Conn.ReadMessage
-	//
-	// At a high level, it reads messages and returns:
-	//  - the type of message read
-	//  - the bytes that were read
-	//  - any errors encountered during reading the message
-	ReadMessage() (messageType int, p []byte, err error)
-
-	WriteMessage(messageType int, p []byte) error
-
+	ReadMessage(ctx context.Context) (messageType int, p []byte, err error)
+	WriteMessage(ctx context.Context, messageType int, p []byte) error
 	Close() error
 }
 
@@ -84,13 +75,29 @@ type defaultConn struct {
 	*websocket.Conn
 }
 
-func (c *defaultConn) ReadMessage() (messageType int, p []byte, err error) {
+func (c *defaultConn) ReadMessage(ctx context.Context) (messageType int, p []byte, err error) {
+	select {
+	case <-ctx.Done():
+		return 0, nil, ctx.Err()
+	default:
+	}
+
+	deadline, _ := ctx.Deadline()
+	c.Conn.SetReadDeadline(deadline)
+
 	messageType, p, err = c.Conn.ReadMessage()
 
 	var closeErr *websocket.CloseError
 	if errors.As(err, &closeErr) {
-		return messageType, p, &CloseError{code: closeErr.Code, text: closeErr.Text}
+		return 0, nil, &CloseError{code: closeErr.Code, text: closeErr.Text}
 	}
 
 	return messageType, p, err
+}
+
+func (c *defaultConn) WriteMessage(ctx context.Context, messageType int, p []byte) error {
+	deadline, _ := ctx.Deadline()
+	c.Conn.SetWriteDeadline(deadline)
+
+	return c.Conn.WriteMessage(messageType, p)
 }

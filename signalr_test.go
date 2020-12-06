@@ -585,7 +585,7 @@ type readResult struct {
 	err     error
 }
 
-func (c *fakeConn) ReadMessage() (msgType int, p []byte, err error) {
+func (c *fakeConn) ReadMessage(ctx context.Context) (msgType int, p []byte, err error) {
 	if len(c.results) == 0 {
 		return 0, []byte(c.msg), nil
 	}
@@ -605,7 +605,7 @@ func (c *fakeConn) ReadMessage() (msgType int, p []byte, err error) {
 	return msgType, p, r.err
 }
 
-func (c *fakeConn) WriteMessage(int, []byte) (err error) {
+func (c *fakeConn) WriteMessage(context.Context, int, []byte) (err error) {
 	return
 }
 
@@ -672,7 +672,7 @@ func (h *rootHandler) connect(t testing.TB, w http.ResponseWriter, req *http.Req
 	}
 
 	h.mtx.Lock()
-	h.conn = conn
+	h.conn = &defaultConn{Conn: conn}
 	h.mtx.Unlock()
 
 	errg, ctx := errgroup.WithContext(req.Context())
@@ -684,7 +684,7 @@ func (h *rootHandler) connect(t testing.TB, w http.ResponseWriter, req *http.Req
 			default:
 			}
 
-			if _, _, err := conn.ReadMessage(); err != nil {
+			if _, _, err := h.conn.ReadMessage(ctx); err != nil {
 				return err
 			}
 		}
@@ -706,7 +706,7 @@ func (h *rootHandler) connect(t testing.TB, w http.ResponseWriter, req *http.Req
 				continue
 			}
 
-			err := h.writeMessage(Message{
+			err := h.writeMessage(ctx, Message{
 				G: groupsToken,
 				C: strconv.FormatInt(int64(messageID), 10),
 			})
@@ -721,7 +721,7 @@ func (h *rootHandler) connect(t testing.TB, w http.ResponseWriter, req *http.Req
 	_ = errg.Wait()
 }
 
-func (h *rootHandler) start(t testing.TB, w http.ResponseWriter, _ *http.Request) {
+func (h *rootHandler) start(t testing.TB, w http.ResponseWriter, req *http.Request) {
 	h.mtx.Lock()
 	h.started = false
 	conn := h.conn
@@ -742,7 +742,7 @@ func (h *rootHandler) start(t testing.TB, w http.ResponseWriter, _ *http.Request
 		return
 	}
 
-	if err := h.writeMessage(Message{S: statusStarted}); err != nil {
+	if err := h.writeMessage(req.Context(), Message{S: statusStarted}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -751,7 +751,7 @@ func (h *rootHandler) start(t testing.TB, w http.ResponseWriter, _ *http.Request
 	h.mtx.Unlock()
 }
 
-func (h *rootHandler) writeMessage(msg Message) error {
+func (h *rootHandler) writeMessage(ctx context.Context, msg Message) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -760,7 +760,7 @@ func (h *rootHandler) writeMessage(msg Message) error {
 	h.mtx.Lock()
 	defer h.mtx.Unlock()
 
-	return h.conn.WriteMessage(textMessage, data)
+	return h.conn.WriteMessage(ctx, textMessage, data)
 }
 
 func errorResponse(status int, paths ...string) testHandlerFunc {

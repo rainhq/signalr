@@ -27,7 +27,7 @@ type Message struct {
 	G string
 
 	// other miscellaneous variables that sometimes are sent by the server
-	I string
+	I int `json:"I,string"`
 	E string
 	R json.RawMessage
 	H json.RawMessage // could be bool or string depending on a message type

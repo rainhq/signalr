@@ -301,10 +301,10 @@ func makeURL(endpoint, command string, state *State) (string, error) {
 	case "negotiate":
 		u.Path += "/negotiate"
 	case "connect":
-		connectURL(u)
+		connectURL(u, query)
 		u.Path += "/connect"
 	case "reconnect":
-		connectURL(u)
+		connectURL(u, query)
 		if groupsToken := state.GroupsToken; groupsToken != "" {
 			query.Set("groupsToken", groupsToken)
 		}
@@ -323,15 +323,13 @@ func makeURL(endpoint, command string, state *State) (string, error) {
 	return u.String(), nil
 }
 
-func connectURL(u *url.URL) {
+func connectURL(u *url.URL, query url.Values) {
 	switch {
 	case u.Scheme == "https":
 		u.Scheme = "wss"
 	case u.Scheme == "http":
 		u.Scheme = "ws"
 	}
-
-	query := u.Query()
 
 	query.Set("transport", "webSockets")
 	tid, _ := rand.Int(rand.Reader, big.NewInt(1000000))

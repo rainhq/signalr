@@ -140,12 +140,12 @@ func TestReadMessage(t *testing.T) {
 		{
 			name:        "normal message",
 			readResults: []readResult{{msg: `{"C":"test message"}`}},
-			expectedMsg: Message{C: "test message"},
+			expectedMsg: Message{MessageID: "test message"},
 		},
 		{
 			name:        "groups token",
 			readResults: []readResult{{msg: `{"C":"test message","G":"custom-groups-token"}`}},
-			expectedMsg: Message{C: "test message", G: "custom-groups-token"},
+			expectedMsg: Message{MessageID: "test message", GroupsToken: "custom-groups-token"},
 		},
 		{
 			name: "recover after websocket closed",
@@ -153,7 +153,7 @@ func TestReadMessage(t *testing.T) {
 				{err: &CloseError{code: 1001}},
 				{msg: `{"C":"test message"}`},
 			},
-			expectedMsg: Message{C: "test message"},
+			expectedMsg: Message{MessageID: "test message"},
 		},
 		{
 			name: "reconnect failed",
@@ -219,8 +219,8 @@ func TestReadMessage(t *testing.T) {
 				ConnectionID:    connectionID,
 				ConnectionToken: connectionToken,
 				Protocol:        protocolVersion,
-				GroupsToken:     tc.expectedMsg.G,
-				MessageID:       tc.expectedMsg.C,
+				GroupsToken:     tc.expectedMsg.GroupsToken,
+				MessageID:       tc.expectedMsg.MessageID,
 			}, *c.State())
 			expectMessage(t, tc.expectedMsg, msg)
 		})
@@ -707,8 +707,8 @@ func (h *rootHandler) connect(t testing.TB, w http.ResponseWriter, req *http.Req
 			}
 
 			err := h.writeMessage(ctx, Message{
-				G: groupsToken,
-				C: strconv.FormatInt(int64(messageID), 10),
+				GroupsToken: groupsToken,
+				MessageID:   strconv.FormatInt(int64(messageID), 10),
 			})
 			if err != nil {
 				return err
@@ -742,7 +742,7 @@ func (h *rootHandler) start(t testing.TB, w http.ResponseWriter, req *http.Reque
 		return
 	}
 
-	if err := h.writeMessage(req.Context(), Message{S: statusStarted}); err != nil {
+	if err := h.writeMessage(req.Context(), Message{Status: statusStarted}); err != nil {
 		t.Fatal(err)
 	}
 

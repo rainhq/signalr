@@ -8,60 +8,60 @@ import (
 	"github.com/cenkalti/backoff/v4"
 )
 
-type Opt func(*config)
+type DialOpt func(*config)
 
-func HTTPClient(client *http.Client) Opt {
+func HTTPClient(client *http.Client) DialOpt {
 	return func(c *config) {
 		c.Client = client
 	}
 }
 
-func Dialer(dialer WebsocketDialerFunc) Opt {
+func Dialer(dialer WebsocketDialerFunc) DialOpt {
 	return func(c *config) {
 		c.Dialer = dialer
 	}
 }
 
-func Protocol(protocol string) Opt {
+func Protocol(protocol string) DialOpt {
 	return func(c *config) {
 		c.Protocol = protocol
 	}
 }
 
-func Params(params url.Values) Opt {
+func Params(params url.Values) DialOpt {
 	return func(c *config) {
 		c.Params = params
 	}
 }
 
-func Headers(headers http.Header) Opt {
+func Headers(headers http.Header) DialOpt {
 	return func(c *config) {
 		c.Headers = headers
 	}
 }
 
 // The maximum number of times to re-attempt a negotiation.
-func MaxNegotiateRetries(retries int) Opt {
+func MaxNegotiateRetries(retries int) DialOpt {
 	return func(c *config) {
 		c.MaxNegotiateRetries = retries
 	}
 }
 
 // The maximum number of times to re-attempt a connection.
-func MaxConnectRetries(retries int) Opt {
+func MaxConnectRetries(retries int) DialOpt {
 	return func(c *config) {
 		c.MaxConnectRetries = retries
 	}
 }
 
-func MaxReconnectRetries(retries int) Opt {
+func MaxReconnectRetries(retries int) DialOpt {
 	return func(c *config) {
 		c.MaxReconnectRetries = retries
 	}
 }
 
 // The maximum number of times to re-attempt a start command.
-func MaxStartRetries(retries int) Opt {
+func MaxStartRetries(retries int) DialOpt {
 	return func(c *config) {
 		c.MaxStartRetries = retries
 	}
@@ -69,14 +69,14 @@ func MaxStartRetries(retries int) Opt {
 
 // The time to wait before retrying, in the event that an error occurs
 // when contacting the SignalR service.
-func RetryInterval(interval time.Duration) Opt {
+func RetryInterval(interval time.Duration) DialOpt {
 	return func(c *config) {
 		c.RetryInterval = interval
 	}
 }
 
 // The maximum amount of time to spend retrying a reconnect attempt.
-func MaxReconnectDuration(duration time.Duration) Opt {
+func MaxReconnectDuration(duration time.Duration) DialOpt {
 	return func(c *config) {
 		c.MaxReconnectDuration = duration
 	}

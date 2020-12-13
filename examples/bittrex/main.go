@@ -2,9 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"log"
-	"strconv"
 
 	"github.com/rainhq/signalr/v2"
 	"golang.org/x/sync/errgroup"
@@ -41,10 +39,10 @@ func main() {
 	errg.Go(func() error {
 		// Subscribe to the USDT-BTC feed.
 		return c.WriteMessage(ctx, signalr.ClientMsg{
-			H: "c2",
-			M: "SubscribeToExchangeDeltas",
-			A: []json.RawMessage{[]byte(strconv.Quote("USDT-BTC"))},
-			I: 1,
+			Hub:          "c2",
+			Method:       "SubscribeToExchangeDeltas",
+			Args:         []interface{}{"USDT-BTC"},
+			InvocationID: 1,
 		})
 	})
 

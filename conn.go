@@ -16,9 +16,8 @@ import (
 	"github.com/cenkalti/backoff/v4"
 )
 
-// Client represents a SignlR client. It manages connections so that the caller
-// doesn't have to.
-type Client struct {
+// Conn represents a SignalR connection
+type Conn struct {
 	mtx      sync.Mutex
 	client   *http.Client
 	dialer   WebsocketDialer
@@ -28,6 +27,7 @@ type Client struct {
 	state    *State
 }
 
+// State represents a SignalR connection state
 type State struct {
 	ConnectionData  string
 	ConnectionID    string
@@ -38,7 +38,7 @@ type State struct {
 }
 
 // Dial connects to Signalr endpoint
-func Dial(ctx context.Context, endpoint, cdata string, opts ...Opt) (*Client, error) {
+func Dial(ctx context.Context, endpoint, cdata string, opts ...DialOpt) (*Conn, error) {
 	cfg := defaultConfig
 	for _, opt := range opts {
 		opt(&cfg)
@@ -76,7 +76,7 @@ func Dial(ctx context.Context, endpoint, cdata string, opts ...Opt) (*Client, er
 		return nil, &StartError{cause: err}
 	}
 
-	return &Client{
+	return &Conn{
 		client:   client,
 		dialer:   dialer,
 		conn:     conn,
@@ -86,7 +86,7 @@ func Dial(ctx context.Context, endpoint, cdata string, opts ...Opt) (*Client, er
 	}, nil
 }
 
-func (c *Client) State() *State {
+func (c *Conn) State() *State {
 	c.mtx.Lock()
 	state := *c.state
 	c.mtx.Unlock()
@@ -95,7 +95,7 @@ func (c *Client) State() *State {
 }
 
 // ReadMessage reads single message from websocket
-func (c *Client) ReadMessage(ctx context.Context, msg *Message) error {
+func (c *Conn) ReadMessage(ctx context.Context, msg *Message) error {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
@@ -124,7 +124,7 @@ func (c *Client) ReadMessage(ctx context.Context, msg *Message) error {
 }
 
 // Send sends a message to the websocket connection.
-func (c *Client) WriteMessage(ctx context.Context, msg ClientMsg) error {
+func (c *Conn) WriteMessage(ctx context.Context, msg ClientMsg) error {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
@@ -141,7 +141,7 @@ func (c *Client) WriteMessage(ctx context.Context, msg ClientMsg) error {
 }
 
 // Close closes underlying websocket connection
-func (c *Client) Close() error {
+func (c *Conn) Close() error {
 	return c.conn.Close()
 }
 
@@ -265,8 +265,8 @@ func start(ctx context.Context, client *http.Client, conn WebsocketConn, endpoin
 			return &ReadError{cause: err}
 		}
 
-		if msg.S != statusStarted {
-			return &InvalidInitMessageError{actual: msg.S}
+		if msg.Status != statusStarted {
+			return &InvalidInitMessageError{actual: msg.Status}
 		}
 
 		return nil

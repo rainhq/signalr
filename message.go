@@ -16,43 +16,45 @@ var (
 // connection.
 type Message struct {
 	// message id, present for all non-KeepAlive messages
-	C string
-
-	// an array containing actual data
-	M []ClientMsg
-
-	// indicates that the transport was initialized (a.k.a. init message)
-	S int
+	MessageID string `json:"C"`
 
 	// groups token – an encrypted string representing group membership
-	G string
+	GroupsToken string `json:"G"`
 
-	// other miscellaneous variables that sometimes are sent by the server
-	I int `json:"I,string"`
-	E string
-	R json.RawMessage
-	H json.RawMessage // could be bool or string depending on a message type
-	D json.RawMessage
-	T json.RawMessage
+	InvocationID int `json:"I,string"`
+
+	// an array containing actual data
+	Messages []ClientMsg `json:"M"`
+
+	// indicates that the transport was initialized (a.k.a. init message)
+	Status int `json:"S"`
+
+	// error
+	Error       string                  `json:"E"`
+	ErrorDetail *map[string]interface{} `json:"D"`
+	HubError    bool                    `json:"H"`
+
+	// result
+	Result interface{} `json:"R"`
 }
 
 // ClientMsg represents a message sent to the Hubs API from the client.
 type ClientMsg struct {
 	// invocation identifier – allows to match up responses with requests
-	I int
+	InvocationID int `json:"I"`
 
 	// the name of the hub
-	H string
+	Hub string `json:"H"`
 
 	// the name of the method
-	M string
+	Method string `json:"M"`
 
 	// arguments (an array, can be empty if the method does not have any
 	// parameters)
-	A []json.RawMessage
+	Args []interface{} `json:"A"`
 
 	// state – a dictionary containing additional custom data (optional)
-	S *json.RawMessage `json:",omitempty"`
+	State *json.RawMessage `json:"S,omitempty"`
 }
 
 // ServerMsg represents a message sent to the Hubs API from the server.
@@ -104,13 +106,13 @@ func readMessage(ctx context.Context, conn WebsocketConn, msg *Message, state *S
 		}
 
 		// Update the groups token.
-		if msg.G != "" {
-			state.GroupsToken = msg.G
+		if msg.GroupsToken != "" {
+			state.GroupsToken = msg.GroupsToken
 		}
 
 		// Update the current message ID.
-		if msg.C != "" {
-			state.MessageID = msg.C
+		if msg.MessageID != "" {
+			state.MessageID = msg.MessageID
 		}
 
 		return nil

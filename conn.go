@@ -18,13 +18,13 @@ import (
 
 // Conn represents a SignalR connection
 type Conn struct {
-	mtx      sync.Mutex
-	client   *http.Client
-	dialer   WebsocketDialer
-	conn     WebsocketConn
-	endpoint string
-	config   *config
-	state    *State
+	rmtx, wmtx sync.Mutex
+	client     *http.Client
+	dialer     WebsocketDialer
+	conn       WebsocketConn
+	endpoint   string
+	config     *config
+	state      *State
 }
 
 // State represents a SignalR connection state
@@ -87,17 +87,17 @@ func Dial(ctx context.Context, endpoint, cdata string, opts ...DialOpt) (*Conn, 
 }
 
 func (c *Conn) State() *State {
-	c.mtx.Lock()
+	c.rmtx.Lock()
 	state := *c.state
-	c.mtx.Unlock()
+	c.rmtx.Unlock()
 
 	return &state
 }
 
 // ReadMessage reads single message from websocket
 func (c *Conn) ReadMessage(ctx context.Context, msg *Message) error {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
+	c.rmtx.Lock()
+	defer c.rmtx.Unlock()
 
 	err := readMessage(ctx, c.conn, msg, c.state)
 	if IsCloseError(err, 1000, 1001, 1006) {
@@ -125,8 +125,8 @@ func (c *Conn) ReadMessage(ctx context.Context, msg *Message) error {
 
 // Send sends a message to the websocket connection.
 func (c *Conn) WriteMessage(ctx context.Context, msg ClientMsg) error {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
+	c.wmtx.Lock()
+	defer c.wmtx.Unlock()
 
 	data, err := json.Marshal(msg)
 	if err != nil {

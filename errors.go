@@ -126,14 +126,6 @@ func (e *InvalidInitMessageError) Error() string {
 	return fmt.Sprintf("expected init message S value %d, got %d", 1, e.actual)
 }
 
-type DuplicateInvocationError struct {
-	method string
-}
-
-func (e *DuplicateInvocationError) Error() string {
-	return fmt.Sprintf("duplicate invocation of method %q", e.method)
-}
-
 type DuplicateCallbackError struct {
 	method string
 }
@@ -144,9 +136,10 @@ func (e *DuplicateCallbackError) Error() string {
 
 type InvocationError struct {
 	method  string
+	id      int
 	message string
 }
 
 func (e *InvocationError) Error() string {
-	return fmt.Sprintf("failed to invoke %q: %s", e.method, e.message)
+	return fmt.Sprintf("failed to invoke %q (%d): %s", e.method, e.id, e.message)
 }

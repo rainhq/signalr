@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strconv"
 
 	"github.com/rainhq/signalr/v2"
 	"golang.org/x/sync/errgroup"
@@ -42,7 +43,7 @@ func main() {
 		return c.WriteMessage(ctx, signalr.ClientMsg{
 			H: "c2",
 			M: "SubscribeToExchangeDeltas",
-			A: []json.RawMessage{[]byte("USDT-BTC")},
+			A: []json.RawMessage{[]byte(strconv.Quote("USDT-BTC"))},
 			I: 1,
 		})
 	})

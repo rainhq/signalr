@@ -1,6 +1,7 @@
 package signalr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -83,30 +84,37 @@ type ServerMsg struct {
 }
 
 func readMessage(ctx context.Context, conn WebsocketConn, msg *Message, state *State) error {
-	t, p, err := conn.ReadMessage(ctx)
-	if err != nil {
-		return fmt.Errorf("message read failed: %w", err)
-	}
+	for {
+		t, p, err := conn.ReadMessage(ctx)
+		if err != nil {
+			return fmt.Errorf("message read failed: %w", err)
+		}
 
-	if t != textMessage {
-		return fmt.Errorf("unexpected websocket control type: %d", t)
-	}
+		if t != textMessage {
+			return fmt.Errorf("unexpected websocket control type: %d", t)
+		}
 
-	if err := json.Unmarshal(p, msg); err != nil {
-		return err
-	}
+		// skip empty messages
+		if bytes.Equal(p, []byte("{}")) {
+			continue
+		}
 
-	// Update the groups token.
-	if msg.G != "" {
-		state.GroupsToken = msg.G
-	}
+		if err := json.Unmarshal(p, msg); err != nil {
+			return err
+		}
 
-	// Update the current message ID.
-	if msg.C != "" {
-		state.MessageID = msg.C
-	}
+		// Update the groups token.
+		if msg.G != "" {
+			state.GroupsToken = msg.G
+		}
 
-	return nil
+		// Update the current message ID.
+		if msg.C != "" {
+			state.MessageID = msg.C
+		}
+
+		return nil
+	}
 }
 
 type negotiateResponse struct {

@@ -16,7 +16,7 @@ type Client struct {
 	callbacks    map[string]chan callbackResult
 }
 
-type CallbackFunc func(messages []ClientMsg, err error) error
+type CallbackFunc func(messages []ClientMsg) error
 
 func NewClient(hub string, conn *Conn) *Client {
 	return &Client{
@@ -82,7 +82,11 @@ func (c *Client) Callback(ctx context.Context, method string, callback CallbackF
 		case <-ctx.Done():
 			return ctx.Err()
 		case res := <-ch:
-			if err := callback(res.Messages, res.Error); err != nil {
+			if res.Error != nil {
+				return err
+			}
+
+			if err := callback(res.Messages); err != nil {
 				return err
 			}
 		}

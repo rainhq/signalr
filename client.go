@@ -31,39 +31,11 @@ func (c *Client) Run(ctx context.Context) error {
 			return err
 		}
 
-		c.mtx.Lock()
-		defer c.mtx.Unlock()
-
 		if len(msg.Messages) == 0 {
 			continue
 		}
 
-		method := msg.Messages[0].Method
-
-		for m, ch := range c.invocations {
-			if m != method {
-				continue
-			}
-
-			var err error
-			if msg.Error != "" {
-				err = &InvocationError{
-					method:  method,
-					message: msg.Error,
-				}
-			}
-
-			ch <- invocationResult{Result: msg.Result, Error: err}
-			c.removeInvocation(method)
-		}
-
-		for m, ch := range c.callbacks {
-			if m != method {
-				continue
-			}
-
-			ch <- callbackResult{Messages: msg.Messages}
-		}
+		c.process(msg)
 	}
 }
 
@@ -105,6 +77,38 @@ func (c *Client) Callback(ctx context.Context, method string, callback CallbackF
 				return err
 			}
 		}
+	}
+}
+
+func (c *Client) process(msg Message) {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
+	method := msg.Messages[0].Method
+
+	for m, ch := range c.invocations {
+		if m != method {
+			continue
+		}
+
+		var err error
+		if msg.Error != "" {
+			err = &InvocationError{
+				method:  method,
+				message: msg.Error,
+			}
+		}
+
+		ch <- invocationResult{Result: msg.Result, Error: err}
+		c.removeInvocation(method)
+	}
+
+	for m, ch := range c.callbacks {
+		if m != method {
+			continue
+		}
+
+		ch <- callbackResult{Messages: msg.Messages}
 	}
 }
 

@@ -18,6 +18,15 @@ type Client struct {
 
 type CallbackFunc func(messages []ClientMsg, err error) error
 
+func NewClient(hub string, conn *Conn) *Client {
+	return &Client{
+		hub:         hub,
+		conn:        conn,
+		invocations: make(map[string]chan invocationResult),
+		callbacks:   make(map[string]chan callbackResult),
+	}
+}
+
 func (c *Client) Run(ctx context.Context) error {
 	for {
 		select {

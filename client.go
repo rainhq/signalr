@@ -161,6 +161,7 @@ func (c *Client) process(msg Message) {
 
 		select {
 		case <-callback.ctx.Done():
+			close(callback.ch)
 			delete(c.callbacks, clientMsg.Method)
 		case callback.ch <- callbackResult{message: clientMsg}:
 		}
@@ -257,7 +258,6 @@ func (s CallbackStream) readResult() callbackResult {
 
 func (s CallbackStream) Close() {
 	s.cancel()
-	close(s.ch)
 }
 
 func marshalArgs(src []interface{}) ([]json.RawMessage, error) {

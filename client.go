@@ -2,6 +2,7 @@ package signalr
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 )
 
@@ -17,6 +18,11 @@ type Client struct {
 }
 
 type CallbackFunc func(messages []ClientMsg) error
+
+type InvocationResult struct {
+	result json.RawMessage
+	err    error
+}
 
 func NewClient(hub string, conn *Conn) *Client {
 	return &Client{
@@ -45,23 +51,23 @@ func (c *Client) Run(ctx context.Context) error {
 	}
 }
 
-func (c *Client) Invoke(ctx context.Context, method string, args ...interface{}) (interface{}, error) {
+func (c *Client) Invoke(ctx context.Context, method string, args ...interface{}) InvocationResult {
 	id, ch, err := c.addInvocation(ctx, method)
 	if err != nil {
-		return nil, err
+		return InvocationResult{err: err}
 	}
 
 	req := ClientMsg{Hub: c.hub, Method: method, Args: args, InvocationID: id}
 
 	if err := c.conn.WriteMessage(ctx, req); err != nil {
-		return nil, err
+		return InvocationResult{err: err}
 	}
 
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return InvocationResult{err: ctx.Err()}
 	case res := <-ch:
-		return res.result, res.err
+		return res
 	}
 }
 
@@ -125,7 +131,7 @@ func (c *Client) process(msg Message) {
 
 		select {
 		case <-invocation.ctx.Done():
-		case invocation.ch <- invocationResult{result: msg.Result, err: err}:
+		case invocation.ch <- InvocationResult{result: msg.Result, err: err}:
 		}
 
 		close(invocation.ch)
@@ -158,14 +164,14 @@ func (c *Client) process(msg Message) {
 	c.backlog[method] = append(c.backlog[method], msg.Messages...)
 }
 
-func (c *Client) addInvocation(ctx context.Context, method string) (id int, ch chan invocationResult, err error) {
+func (c *Client) addInvocation(ctx context.Context, method string) (id int, ch chan InvocationResult, err error) {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
 	id = c.invocationID
 	c.invocationID++
 
-	ch = make(chan invocationResult, 1)
+	ch = make(chan InvocationResult, 1)
 
 	c.invocations[id] = invocation{
 		ctx:    ctx,
@@ -217,13 +223,25 @@ func (c *Client) cleanup() {
 	for _, invocation := range c.invocations {
 		select {
 		case <-invocation.ctx.Done():
-		case invocation.ch <- invocationResult{err: context.Canceled}:
+		case invocation.ch <- InvocationResult{err: context.Canceled}:
 		}
 
 		close(invocation.ch)
 	}
 
 	c.invocations = make(map[int]invocation)
+}
+
+func (r InvocationResult) Unmarshal(dest interface{}) error {
+	if r.err != nil {
+		return r.err
+	}
+
+	return json.Unmarshal(r.result, dest)
+}
+
+func (r InvocationResult) Error() error {
+	return r.err
 }
 
 type callback struct {
@@ -234,12 +252,7 @@ type callback struct {
 type invocation struct {
 	ctx    context.Context
 	method string
-	ch     chan invocationResult
-}
-
-type invocationResult struct {
-	result interface{}
-	err    error
+	ch     chan InvocationResult
 }
 
 type callbackResult struct {

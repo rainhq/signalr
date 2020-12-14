@@ -35,7 +35,7 @@ type Message struct {
 	HubError    bool                    `json:"H"`
 
 	// result
-	Result interface{} `json:"R"`
+	Result json.RawMessage `json:"R"`
 }
 
 // ClientMsg represents a message sent to the Hubs API from the client.

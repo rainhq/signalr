@@ -3,6 +3,7 @@ package signalr
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 )
 
@@ -12,24 +13,32 @@ type Client struct {
 	conn *Conn
 
 	invocationID int
-	invocations  map[int]invocation
-	callbacks    map[string]callback
+	invocations  map[int]Invocation
+	callbacks    map[string]CallbackStream
 	backlog      map[string][]ClientMsg
 }
 
-type CallbackFunc func(messages []ClientMsg) error
-
-type InvocationResult struct {
-	result json.RawMessage
+type Invocation struct {
+	ctx    context.Context
+	id     int
+	method string
+	ch     chan invocationResult
 	err    error
+}
+
+type CallbackStream struct {
+	ch      chan callbackResult
+	done    chan struct{}
+	backlog []ClientMsg
+	err     error
 }
 
 func NewClient(hub string, conn *Conn) *Client {
 	return &Client{
 		hub:         hub,
 		conn:        conn,
-		invocations: make(map[int]invocation),
-		callbacks:   make(map[string]callback),
+		invocations: make(map[int]Invocation),
+		callbacks:   make(map[string]CallbackStream),
 		backlog:     make(map[string][]ClientMsg),
 	}
 }
@@ -51,69 +60,63 @@ func (c *Client) Run(ctx context.Context) error {
 	}
 }
 
-func (c *Client) Invoke(ctx context.Context, method string, args ...interface{}) InvocationResult {
-	id, ch, err := c.addInvocation(ctx, method)
+func (c *Client) Invoke(ctx context.Context, method string, args ...interface{}) Invocation {
+	rawArgs, err := marshalArgs(args)
 	if err != nil {
-		return InvocationResult{err: err}
+		return Invocation{err: fmt.Errorf("failed to marshal args: %w", err)}
 	}
 
-	req := ClientMsg{Hub: c.hub, Method: method, Args: args, InvocationID: id}
+	c.mtx.Lock()
+	id := c.invocationID
+	c.invocationID++
+	c.mtx.Unlock()
+
+	req := ClientMsg{Hub: c.hub, Method: method, Args: rawArgs, InvocationID: id}
 
 	if err := c.conn.WriteMessage(ctx, req); err != nil {
-		return InvocationResult{err: err}
+		return Invocation{err: err}
 	}
 
-	select {
-	case <-ctx.Done():
-		return InvocationResult{err: ctx.Err()}
-	case res := <-ch:
-		return res
+	res := Invocation{
+		ctx:    ctx,
+		id:     id,
+		method: method,
+		ch:     make(chan invocationResult, 1),
 	}
+
+	c.mtx.Lock()
+	c.invocations[id] = res
+	c.mtx.Unlock()
+
+	return res
 }
 
-func (c *Client) Callback(ctx context.Context, method string, callback CallbackFunc) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+func (c *Client) Callback(method string) CallbackStream {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
 
-	ch, err := c.addCallback(ctx, method)
-	if err != nil {
-		return err
-	}
-
-	for {
+	if cb, ok := c.callbacks[method]; ok {
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case res := <-ch:
-			if res.err != nil {
-				return err
-			}
-
-			if err := callback(res.messages); err != nil {
-				return err
-			}
+		case <-cb.done:
+		default:
+			return CallbackStream{err: &DuplicateCallbackError{method: method}}
 		}
 	}
+
+	res := CallbackStream{
+		ch:      make(chan callbackResult, 1),
+		done:    make(chan struct{}),
+		backlog: c.backlog[method],
+	}
+
+	c.callbacks[method] = res
+
+	return res
 }
 
 func (c *Client) process(msg Message) {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
-
-	for m, messages := range c.backlog {
-		cb, ok := c.callbacks[m]
-		if !ok {
-			continue
-		}
-
-		select {
-		case <-cb.ctx.Done():
-			close(cb.ch)
-			delete(c.callbacks, m)
-		case cb.ch <- callbackResult{messages: messages}:
-			delete(c.backlog, m)
-		}
-	}
 
 	for id, invocation := range c.invocations {
 		if msg.InvocationID != id {
@@ -131,7 +134,7 @@ func (c *Client) process(msg Message) {
 
 		select {
 		case <-invocation.ctx.Done():
-		case invocation.ch <- InvocationResult{result: msg.Result, err: err}:
+		case invocation.ch <- invocationResult{result: msg.Result, err: err}:
 		}
 
 		close(invocation.ch)
@@ -144,65 +147,20 @@ func (c *Client) process(msg Message) {
 		return
 	}
 
-	method := msg.Messages[0].Method
-
-	for m, callback := range c.callbacks {
-		if m != method {
+	for _, clientMsg := range msg.Messages {
+		method := clientMsg.Method
+		callback, ok := c.callbacks[method]
+		if !ok {
+			c.backlog[method] = append(c.backlog[method], msg.Messages...)
 			continue
 		}
 
 		select {
-		case <-callback.ctx.Done():
-			close(callback.ch)
-			delete(c.callbacks, m)
-		case callback.ch <- callbackResult{messages: msg.Messages}:
-		}
-
-		return
-	}
-
-	c.backlog[method] = append(c.backlog[method], msg.Messages...)
-}
-
-func (c *Client) addInvocation(ctx context.Context, method string) (id int, ch chan InvocationResult, err error) {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
-
-	id = c.invocationID
-	c.invocationID++
-
-	ch = make(chan InvocationResult, 1)
-
-	c.invocations[id] = invocation{
-		ctx:    ctx,
-		method: method,
-		ch:     ch,
-	}
-
-	return id, ch, nil
-}
-
-func (c *Client) addCallback(ctx context.Context, method string) (chan callbackResult, error) {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
-
-	if cb, ok := c.callbacks[method]; ok {
-		select {
-		case <-cb.ctx.Done():
-			close(cb.ch)
-		default:
-			return nil, &DuplicateCallbackError{method: method}
+		case <-callback.done:
+			delete(c.callbacks, clientMsg.Method)
+		case callback.ch <- callbackResult{message: clientMsg}:
 		}
 	}
-
-	ch := make(chan callbackResult, 1)
-
-	c.callbacks[method] = callback{
-		ctx: ctx,
-		ch:  ch,
-	}
-
-	return ch, nil
 }
 
 func (c *Client) cleanup() {
@@ -211,51 +169,126 @@ func (c *Client) cleanup() {
 
 	for _, callback := range c.callbacks {
 		select {
-		case <-callback.ctx.Done():
+		case <-callback.done:
 		case callback.ch <- callbackResult{err: context.Canceled}:
 		}
 
 		close(callback.ch)
 	}
 
-	c.callbacks = make(map[string]callback)
+	c.callbacks = make(map[string]CallbackStream)
 
 	for _, invocation := range c.invocations {
 		select {
 		case <-invocation.ctx.Done():
-		case invocation.ch <- InvocationResult{err: context.Canceled}:
+		case invocation.ch <- invocationResult{err: context.Canceled}:
 		}
 
 		close(invocation.ch)
 	}
 
-	c.invocations = make(map[int]invocation)
+	c.invocations = make(map[int]Invocation)
 }
 
-func (r InvocationResult) Unmarshal(dest interface{}) error {
+func (r Invocation) Unmarshal(dest interface{}) error {
 	if r.err != nil {
 		return r.err
 	}
 
-	return json.Unmarshal(r.result, dest)
+	select {
+	case <-r.ctx.Done():
+		return r.ctx.Err()
+	case res := <-r.ch:
+		if res.err != nil {
+			return res.err
+		}
+
+		return json.Unmarshal(res.result, dest)
+	}
 }
 
-func (r InvocationResult) Error() error {
+func (r Invocation) Exec() error {
 	return r.err
 }
 
-type callback struct {
-	ctx context.Context
-	ch  chan callbackResult
+func (s CallbackStream) Read(ctx context.Context, args ...interface{}) error {
+	res := s.readResult(ctx)
+	if res.err != nil {
+		return res.err
+	}
+
+	if err := unmarshalArgs(res.message.Args, args); err != nil {
+		return fmt.Errorf("failed to unmarshal ")
+	}
+
+	return nil
 }
 
-type invocation struct {
-	ctx    context.Context
-	method string
-	ch     chan InvocationResult
+func (s CallbackStream) readResult(ctx context.Context) callbackResult {
+	select {
+	case <-ctx.Done():
+		return callbackResult{err: ctx.Err()}
+	default:
+	}
+
+	switch {
+	case len(s.backlog) == 1:
+		clientMsg := s.backlog[0]
+		s.backlog = nil
+		return callbackResult{message: clientMsg}
+	case len(s.backlog) > 1:
+		clientMsg := s.backlog[0]
+		s.backlog = s.backlog[1:]
+		return callbackResult{message: clientMsg}
+	}
+
+	select {
+	case <-ctx.Done():
+		return callbackResult{err: ctx.Err()}
+	case res := <-s.ch:
+		return res
+	}
+}
+
+func (s CallbackStream) Close() {
+	close(s.done)
+	close(s.ch)
+}
+
+func marshalArgs(src []interface{}) ([]json.RawMessage, error) {
+	res := make([]json.RawMessage, len(src))
+	for i, v := range src {
+		data, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+
+		res[i] = json.RawMessage(data)
+	}
+
+	return res, nil
+}
+
+func unmarshalArgs(src []json.RawMessage, dest []interface{}) error {
+	if len(src) != len(dest) {
+		return fmt.Errorf("invalid number of arguments: expected %d, got %d", len(src), len(dest))
+	}
+
+	for i, v := range src {
+		if err := json.Unmarshal(v, dest[i]); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+type invocationResult struct {
+	result json.RawMessage
+	err    error
 }
 
 type callbackResult struct {
-	messages []ClientMsg
-	err      error
+	message ClientMsg
+	err     error
 }

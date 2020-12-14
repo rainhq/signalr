@@ -1,21 +1,22 @@
 package main
 
 import (
+	"bytes"
+	"compress/flate"
 	"context"
+	"fmt"
+	"io/ioutil"
 	"log"
 
 	"github.com/rainhq/signalr/v2"
 	"golang.org/x/sync/errgroup"
 )
 
-// For more extensive use cases and capabilities, please see
-// https://github.com/carterjones/bittrex.
-
 func main() {
 	ctx := context.Background()
 
 	// Prepare a SignalR client.
-	c, err := signalr.Dial(
+	conn, err := signalr.Dial(
 		ctx,
 		"https://socket.bittrex.com/signalr",
 		`[{"name":"c2"}]`,
@@ -24,26 +25,34 @@ func main() {
 		log.Fatal(err)
 	}
 
-	errg, ctx := errgroup.WithContext(ctx)
+	client := signalr.NewClient("c2", conn)
 
+	if err := client.Invoke(ctx, "SubscribeToExchangeDeltas", "USD-BTC").Exec(); err != nil {
+		log.Fatal(err)
+	}
+
+	log.Print("Subscribed to exchange deltas")
+
+	errg, ctx := errgroup.WithContext(ctx)
+	errg.Go(func() error { return client.Run(ctx) })
 	errg.Go(func() error {
-		var msg signalr.Message
+		stream := client.Callback("uE")
+		defer stream.Close()
+
 		for {
-			if err := c.ReadMessage(ctx, &msg); err != nil {
+			var data []byte
+			if err := stream.Read(ctx, &data); err != nil {
 				return err
 			}
 
-			log.Println(msg)
+			reader := flate.NewReader(bytes.NewReader(data))
+			decompressed, err := ioutil.ReadAll(reader)
+			if err != nil {
+				return err
+			}
+
+			fmt.Println(string(decompressed))
 		}
-	})
-	errg.Go(func() error {
-		// Subscribe to the USDT-BTC feed.
-		return c.WriteMessage(ctx, signalr.ClientMsg{
-			Hub:          "c2",
-			Method:       "SubscribeToExchangeDeltas",
-			Args:         []interface{}{"USDT-BTC"},
-			InvocationID: 1,
-		})
 	})
 
 	if err := errg.Wait(); err != nil {

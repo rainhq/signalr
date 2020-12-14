@@ -51,7 +51,7 @@ type ClientMsg struct {
 
 	// arguments (an array, can be empty if the method does not have any
 	// parameters)
-	Args []interface{} `json:"A"`
+	Args []json.RawMessage `json:"A"`
 
 	// state – a dictionary containing additional custom data (optional)
 	State *json.RawMessage `json:"S,omitempty"`

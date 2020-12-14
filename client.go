@@ -27,8 +27,9 @@ type Invocation struct {
 }
 
 type CallbackStream struct {
+	ctx     context.Context
+	cancel  context.CancelFunc
 	ch      chan callbackResult
-	done    chan struct{}
 	backlog []ClientMsg
 	err     error
 }
@@ -91,21 +92,24 @@ func (c *Client) Invoke(ctx context.Context, method string, args ...interface{})
 	return res
 }
 
-func (c *Client) Callback(method string) CallbackStream {
+func (c *Client) Callback(ctx context.Context, method string) CallbackStream {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
 	if cb, ok := c.callbacks[method]; ok {
 		select {
-		case <-cb.done:
+		case <-cb.ctx.Done():
 		default:
 			return CallbackStream{err: &DuplicateCallbackError{method: method}}
 		}
 	}
 
+	ctx, cancel := context.WithCancel(ctx)
+
 	res := CallbackStream{
+		ctx:     ctx,
+		cancel:  cancel,
 		ch:      make(chan callbackResult, 1),
-		done:    make(chan struct{}),
 		backlog: c.backlog[method],
 	}
 
@@ -156,7 +160,7 @@ func (c *Client) process(msg Message) {
 		}
 
 		select {
-		case <-callback.done:
+		case <-callback.ctx.Done():
 			delete(c.callbacks, clientMsg.Method)
 		case callback.ch <- callbackResult{message: clientMsg}:
 		}
@@ -169,7 +173,7 @@ func (c *Client) cleanup() {
 
 	for _, callback := range c.callbacks {
 		select {
-		case <-callback.done:
+		case <-callback.ctx.Done():
 		case callback.ch <- callbackResult{err: context.Canceled}:
 		}
 
@@ -211,8 +215,8 @@ func (r Invocation) Exec() error {
 	return r.err
 }
 
-func (s CallbackStream) Read(ctx context.Context, args ...interface{}) error {
-	res := s.readResult(ctx)
+func (s CallbackStream) Read(args ...interface{}) error {
+	res := s.readResult()
 	if res.err != nil {
 		return res.err
 	}
@@ -224,10 +228,11 @@ func (s CallbackStream) Read(ctx context.Context, args ...interface{}) error {
 	return nil
 }
 
-func (s CallbackStream) readResult(ctx context.Context) callbackResult {
+func (s CallbackStream) readResult() callbackResult {
+	// ensure non-blocking read of backlog
 	select {
-	case <-ctx.Done():
-		return callbackResult{err: ctx.Err()}
+	case <-s.ctx.Done():
+		return callbackResult{err: s.ctx.Err()}
 	default:
 	}
 
@@ -243,15 +248,15 @@ func (s CallbackStream) readResult(ctx context.Context) callbackResult {
 	}
 
 	select {
-	case <-ctx.Done():
-		return callbackResult{err: ctx.Err()}
+	case <-s.ctx.Done():
+		return callbackResult{err: s.ctx.Err()}
 	case res := <-s.ch:
 		return res
 	}
 }
 
 func (s CallbackStream) Close() {
-	close(s.done)
+	s.cancel()
 	close(s.ch)
 }
 

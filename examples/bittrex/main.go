@@ -36,12 +36,12 @@ func main() {
 	errg, ctx := errgroup.WithContext(ctx)
 	errg.Go(func() error { return client.Run(ctx) })
 	errg.Go(func() error {
-		stream := client.Callback("uE")
+		stream := client.Callback(ctx, "uE")
 		defer stream.Close()
 
 		for {
 			var data []byte
-			if err := stream.Read(ctx, &data); err != nil {
+			if err := stream.Read(&data); err != nil {
 				return err
 			}
 

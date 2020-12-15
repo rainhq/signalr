@@ -8,14 +8,10 @@ import (
 )
 
 type Client struct {
-	mtx  sync.Mutex
-	hub  string
-	conn *Conn
-
-	invocationID int
-	invocations  map[int]Invocation
-	callbacks    map[string]CallbackStream
-	backlog      map[string][]ClientMsg
+	hub         string
+	conn        *Conn
+	invocations *invocations
+	callbacks   *callbacks
 }
 
 type Invocation struct {
@@ -36,11 +32,12 @@ type CallbackStream struct {
 
 func NewClient(hub string, conn *Conn) *Client {
 	return &Client{
-		hub:         hub,
-		conn:        conn,
-		invocations: make(map[int]Invocation),
-		callbacks:   make(map[string]CallbackStream),
-		backlog:     make(map[string][]ClientMsg),
+		hub:  hub,
+		conn: conn,
+		invocations: &invocations{
+			data: make(map[int]*Invocation),
+		},
+		callbacks: newCallbacks(),
 	}
 }
 
@@ -48,7 +45,8 @@ func (c *Client) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			c.cleanup()
+			c.invocations.removeAll()
+			c.callbacks.removeAll()
 		default:
 		}
 
@@ -57,142 +55,31 @@ func (c *Client) Run(ctx context.Context) error {
 			return err
 		}
 
-		c.process(msg)
+		c.invocations.process(&msg)
+		c.callbacks.process(&msg)
 	}
 }
 
-func (c *Client) Invoke(ctx context.Context, method string, args ...interface{}) Invocation {
+func (c *Client) Invoke(ctx context.Context, method string, args ...interface{}) *Invocation {
 	rawArgs, err := marshalArgs(args)
 	if err != nil {
-		return Invocation{err: fmt.Errorf("failed to marshal args: %w", err)}
+		return &Invocation{err: fmt.Errorf("failed to marshal args: %w", err)}
 	}
 
-	c.mtx.Lock()
-	id := c.invocationID
-	c.invocationID++
-	c.mtx.Unlock()
+	inv := c.invocations.create(ctx, method)
 
-	req := ClientMsg{Hub: c.hub, Method: method, Args: rawArgs, InvocationID: id}
+	req := ClientMsg{Hub: c.hub, Method: method, Args: rawArgs, InvocationID: inv.id}
 
 	if err := c.conn.WriteMessage(ctx, req); err != nil {
-		return Invocation{err: err}
+		c.invocations.remove(inv.id)
+		return &Invocation{err: err}
 	}
 
-	res := Invocation{
-		ctx:    ctx,
-		id:     id,
-		method: method,
-		ch:     make(chan invocationResult, 1),
-	}
-
-	c.mtx.Lock()
-	c.invocations[id] = res
-	c.mtx.Unlock()
-
-	return res
+	return inv
 }
 
-func (c *Client) Callback(ctx context.Context, method string) CallbackStream {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
-
-	if cb, ok := c.callbacks[method]; ok {
-		select {
-		case <-cb.ctx.Done():
-		default:
-			return CallbackStream{err: &DuplicateCallbackError{method: method}}
-		}
-	}
-
-	ctx, cancel := context.WithCancel(ctx)
-
-	res := CallbackStream{
-		ctx:     ctx,
-		cancel:  cancel,
-		ch:      make(chan callbackResult, 1),
-		backlog: c.backlog[method],
-	}
-
-	c.callbacks[method] = res
-
-	return res
-}
-
-func (c *Client) process(msg Message) {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
-
-	for id, invocation := range c.invocations {
-		if msg.InvocationID != id {
-			continue
-		}
-
-		var err error
-		if msg.Error != "" {
-			err = &InvocationError{
-				method:  invocation.method,
-				id:      id,
-				message: msg.Error,
-			}
-		}
-
-		select {
-		case <-invocation.ctx.Done():
-		case invocation.ch <- invocationResult{result: msg.Result, err: err}:
-		}
-
-		close(invocation.ch)
-		delete(c.invocations, id)
-
-		return
-	}
-
-	if len(msg.Messages) == 0 {
-		return
-	}
-
-	for _, clientMsg := range msg.Messages {
-		method := clientMsg.Method
-		callback, ok := c.callbacks[method]
-		if !ok {
-			c.backlog[method] = append(c.backlog[method], msg.Messages...)
-			continue
-		}
-
-		select {
-		case <-callback.ctx.Done():
-			close(callback.ch)
-			delete(c.callbacks, clientMsg.Method)
-		case callback.ch <- callbackResult{message: clientMsg}:
-		}
-	}
-}
-
-func (c *Client) cleanup() {
-	c.mtx.Lock()
-	defer c.mtx.Unlock()
-
-	for _, callback := range c.callbacks {
-		select {
-		case <-callback.ctx.Done():
-		case callback.ch <- callbackResult{err: context.Canceled}:
-		}
-
-		close(callback.ch)
-	}
-
-	c.callbacks = make(map[string]CallbackStream)
-
-	for _, invocation := range c.invocations {
-		select {
-		case <-invocation.ctx.Done():
-		case invocation.ch <- invocationResult{err: context.Canceled}:
-		}
-
-		close(invocation.ch)
-	}
-
-	c.invocations = make(map[int]Invocation)
+func (c *Client) Callback(ctx context.Context, method string) *CallbackStream {
+	return c.callbacks.create(ctx, method)
 }
 
 func (r Invocation) Unmarshal(dest interface{}) error {
@@ -286,6 +173,165 @@ func unmarshalArgs(src []json.RawMessage, dest []interface{}) error {
 	}
 
 	return nil
+}
+
+type invocations struct {
+	mtx  sync.Mutex
+	id   int
+	data map[int]*Invocation
+}
+
+func (i *invocations) create(ctx context.Context, method string) *Invocation {
+	i.mtx.Lock()
+	defer i.mtx.Unlock()
+
+	id := i.id
+	i.id++
+
+	inv := &Invocation{
+		ctx:    ctx,
+		id:     id,
+		method: method,
+		ch:     make(chan invocationResult, 1),
+	}
+
+	i.data[id] = inv
+
+	return inv
+}
+
+func (i *invocations) remove(id int) {
+	i.mtx.Lock()
+	defer i.mtx.Unlock()
+
+	inv, ok := i.data[id]
+	if !ok {
+		return
+	}
+
+	close(inv.ch)
+	delete(i.data, id)
+}
+
+func (i *invocations) process(msg *Message) {
+	i.mtx.Lock()
+	defer i.mtx.Unlock()
+
+	id := msg.InvocationID
+
+	inv, ok := i.data[id]
+	if !ok {
+		return
+	}
+
+	var err error
+	if msg.Error != "" {
+		err = &InvocationError{
+			method:  inv.method,
+			id:      id,
+			message: msg.Error,
+		}
+	}
+
+	select {
+	case <-inv.ctx.Done():
+	case inv.ch <- invocationResult{result: msg.Result, err: err}:
+	}
+
+	close(inv.ch)
+	delete(i.data, id)
+}
+
+func (i *invocations) removeAll() {
+	i.mtx.Lock()
+	defer i.mtx.Unlock()
+
+	for _, inv := range i.data {
+		close(inv.ch)
+	}
+
+	i.data = make(map[int]*Invocation)
+}
+
+type callbacks struct {
+	mtx     sync.Mutex
+	data    map[string]*CallbackStream
+	backlog map[string][]ClientMsg
+}
+
+func newCallbacks() *callbacks {
+	return &callbacks{
+		data:    make(map[string]*CallbackStream),
+		backlog: make(map[string][]ClientMsg),
+	}
+}
+
+func (c *callbacks) create(ctx context.Context, method string) *CallbackStream {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
+	if cb, ok := c.data[method]; ok {
+		select {
+		case <-cb.ctx.Done():
+		default:
+			return &CallbackStream{err: &DuplicateCallbackError{method: method}}
+		}
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+
+	res := &CallbackStream{
+		ctx:     ctx,
+		cancel:  cancel,
+		ch:      make(chan callbackResult, 1),
+		backlog: c.backlog[method],
+	}
+
+	c.data[method] = res
+
+	return res
+}
+
+func (c *callbacks) process(msg *Message) {
+	if len(msg.Messages) == 0 {
+		return
+	}
+
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
+	for _, clientMsg := range msg.Messages {
+		method := clientMsg.Method
+		callback, ok := c.data[method]
+		if !ok {
+			c.backlog[method] = append(c.backlog[method], msg.Messages...)
+			continue
+		}
+
+		select {
+		case <-callback.ctx.Done():
+			close(callback.ch)
+			delete(c.data, method)
+		case callback.ch <- callbackResult{message: clientMsg}:
+		}
+	}
+}
+
+func (c *callbacks) removeAll() {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+
+	for _, callback := range c.data {
+		select {
+		case <-callback.ctx.Done():
+		case callback.ch <- callbackResult{err: context.Canceled}:
+		}
+
+		close(callback.ch)
+	}
+
+	c.data = make(map[string]*CallbackStream)
+	c.backlog = make(map[string][]ClientMsg)
 }
 
 type invocationResult struct {

@@ -4,16 +4,31 @@ import (
 	"bytes"
 	"compress/flate"
 	"context"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
+	"os"
+	"os/signal"
 
 	"github.com/rainhq/signalr/v2"
 	"golang.org/x/sync/errgroup"
 )
 
 func main() {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+
+	go func() {
+		select {
+		case <-c:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	// Prepare a SignalR client.
 	conn, err := signalr.Dial(
@@ -22,6 +37,7 @@ func main() {
 		`[{"name":"c2"}]`,
 	)
 	if err != nil {
+		//nolint:gocritic
 		log.Fatal(err)
 	}
 
@@ -55,7 +71,7 @@ func main() {
 		}
 	})
 
-	if err := errg.Wait(); err != nil {
+	if err := errg.Wait(); err != nil && !errors.Is(err, context.Canceled) {
 		log.Fatal(err)
 	}
 }

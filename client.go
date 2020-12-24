@@ -47,6 +47,7 @@ func (c *Client) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			c.invocations.removeAll()
 			c.callbacks.removeAll()
+			return c.conn.Close()
 		default:
 		}
 

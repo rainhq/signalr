@@ -32,12 +32,10 @@ type CallbackStream struct {
 
 func NewClient(hub string, conn *Conn) *Client {
 	return &Client{
-		hub:  hub,
-		conn: conn,
-		invocations: &invocations{
-			data: make(map[int]*Invocation),
-		},
-		callbacks: newCallbacks(),
+		hub:         hub,
+		conn:        conn,
+		invocations: newInvocations(),
+		callbacks:   newCallbacks(),
 	}
 }
 
@@ -83,7 +81,7 @@ func (c *Client) Callback(ctx context.Context, method string) *CallbackStream {
 	return c.callbacks.create(ctx, method)
 }
 
-func (r Invocation) Unmarshal(dest interface{}) error {
+func (r *Invocation) Unmarshal(dest interface{}) error {
 	if r.err != nil {
 		return r.err
 	}
@@ -100,11 +98,11 @@ func (r Invocation) Unmarshal(dest interface{}) error {
 	}
 }
 
-func (r Invocation) Exec() error {
+func (r *Invocation) Exec() error {
 	return r.err
 }
 
-func (s CallbackStream) Read(args ...interface{}) error {
+func (s *CallbackStream) Read(args ...interface{}) error {
 	res := s.readResult()
 	if res.err != nil {
 		return res.err
@@ -117,7 +115,7 @@ func (s CallbackStream) Read(args ...interface{}) error {
 	return nil
 }
 
-func (s CallbackStream) readResult() callbackResult {
+func (s *CallbackStream) readResult() callbackResult {
 	// ensure non-blocking read of backlog
 	select {
 	case <-s.ctx.Done():
@@ -144,7 +142,7 @@ func (s CallbackStream) readResult() callbackResult {
 	}
 }
 
-func (s CallbackStream) Close() {
+func (s *CallbackStream) Close() {
 	s.cancel()
 }
 
@@ -180,6 +178,13 @@ type invocations struct {
 	mtx  sync.Mutex
 	id   int
 	data map[int]*Invocation
+}
+
+func newInvocations() *invocations {
+	return &invocations{
+		id:   1,
+		data: make(map[int]*Invocation),
+	}
 }
 
 func (i *invocations) create(ctx context.Context, method string) *Invocation {

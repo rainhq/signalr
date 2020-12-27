@@ -5,7 +5,6 @@ import (
 	"compress/flate"
 	"context"
 	"errors"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
@@ -74,7 +73,7 @@ func main() {
 				return err
 			}
 
-			fmt.Println(string(decompressed))
+			log.Println(string(decompressed))
 		}
 	})
 

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"compress/flate"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
@@ -10,18 +8,19 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
+	"net/http"
 	"os"
-	"os/signal"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/rainhq/signalr/v2"
+	"github.com/shopspring/decimal"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/term"
 )
 
 func main() {
@@ -30,17 +29,45 @@ func main() {
 		log.Fatal(err)
 	}
 
+	err = run(config)
+	switch {
+	case errors.Is(err, context.Canceled):
+		os.Exit(130)
+	case err != nil:
+		log.Fatal(err)
+	}
+}
+
+func run(config *config) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	state, err := term.MakeRaw(int(os.Stdin.Fd()))
+	if err != nil {
+		return err
+	}
+
+	t := term.NewTerminal(os.Stdin, "")
+	fmt.Fprintf(t, "\033[?25l")
+
+	defer func() {
+		fmt.Fprintf(t, "\033[?25h")
+		if err := term.Restore(int(os.Stdin.Fd()), state); err != nil {
+			log.Print(err)
+		}
+	}()
+
 	// handle Ctrl-C gracefully
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
 	go func() {
-		select {
-		case <-c:
-			cancel()
-		case <-ctx.Done():
+		for {
+			_, err := t.ReadLine()
+			switch {
+			case errors.Is(err, io.EOF):
+				cancel()
+				return
+			case err != nil:
+				log.Print(err)
+			}
 		}
 	}()
 
@@ -54,56 +81,22 @@ func main() {
 		`[{"name":"c3"}]`,
 	)
 	if err != nil {
-		//nolint:gocritic
-		log.Fatal(err)
+		return fmt.Errorf("failed to connect to bittrex: %w", err)
 	}
 
-	client := signalr.NewClient("c3", conn)
+	signalrClient := signalr.NewClient("c3", conn)
 
 	errg, ctx := errgroup.WithContext(ctx)
-	errg.Go(func() error { return client.Run(ctx) })
+	errg.Go(func() error { return signalrClient.Run(ctx) })
 	errg.Go(func() error {
-		if err := authenticate(ctx, client, config.APIKey, config.APISecret); err != nil {
-			return err
-		}
-
-		streams := make([]string, len(config.Symbols))
-		for i, symbol := range config.Symbols {
-			streams[i] = fmt.Sprintf("orderbook_%s_%d", symbol, config.Depth)
-		}
-
-		if err := subscribe(ctx, client, streams); err != nil {
-			return err
-		}
-
-		callback := client.Callback(ctx, "orderBook")
-		defer callback.Close()
-
-		log.Print("Subscribed to exchange deltas")
-
-		for {
-			var data []byte
-			if err := callback.Read(&data); err != nil {
-				return err
-			}
-
-			reader := flate.NewReader(bytes.NewReader(data))
-			decompressed, err := ioutil.ReadAll(reader)
-			if err != nil {
-				return err
-			}
-
-			fmt.Println(string(decompressed))
-		}
+		client := NewClient(http.DefaultClient, signalrClient)
+		return client.SubscribeOrderBook(ctx, config.Symbol, config.Depth, func(orderBook *OrderBook, diff *OrderBookDiff) error {
+			printOrderBook(t, orderBook, diff)
+			return nil
+		})
 	})
 
-	err = errg.Wait()
-	switch {
-	case errors.Is(err, context.Canceled):
-		os.Exit(130)
-	case err != nil:
-		log.Fatal(err)
-	}
+	return errg.Wait()
 }
 
 type SocketResponse struct {
@@ -119,41 +112,55 @@ func (e *SubscriptionError) Error() string {
 	return fmt.Sprintf("subscription failed: %s", strings.Join(e.Streams, ", "))
 }
 
-type config struct {
-	APIKey    string
-	APISecret string
-	Symbols   []string
-	Depth     int
-}
-
-func parseConfig() (*config, error) {
-	apiKey, ok := os.LookupEnv("BITTREX_API_KEY")
-	if !ok {
-		return nil, errors.New("BITTREX_API_KEY is required")
+func printOrderBook(t *term.Terminal, orderBook *OrderBook, diff *OrderBookDiff) {
+	printEscape := func(t *term.Terminal, esc []byte, s string) {
+		fmt.Fprint(t, string(esc), s, string(t.Escape.Reset))
 	}
 
-	apiSecret, ok := os.LookupEnv("BITTREX_API_SECRET")
-	if !ok {
-		return nil, errors.New("BITTREX_API_SECRET is required")
+	center := func(s string, l int) string {
+		padding := l - len([]rune(s))
+		lpad := padding / 2
+
+		b := strings.Builder{}
+
+		for i := 0; i < lpad; i++ {
+			_, _ = b.WriteRune(' ')
+		}
+
+		_, _ = b.WriteString(s)
+
+		for i := 0; i < padding-lpad; i++ {
+			_, _ = b.WriteRune(' ')
+		}
+
+		return b.String()
 	}
 
-	fs := flag.NewFlagSet("bittrex_v3", flag.ContinueOnError)
-	symbols := fs.String("symbols", "BTC-USD,", "comma separated list order book market symbols")
-	depth := fs.Int("depth", 25, "order book depth (1, 25 or 500)")
-	if err := fs.Parse(os.Args[1:]); err != nil {
-		return nil, err
+	color := func(entry OrderBookEntry, diffs OrderBookDiffEntries) []byte {
+		i := diffs.SearchRate(entry.Rate, decimal.Decimal.Equal)
+		switch {
+		case i == len(diffs):
+			return nil
+		case diffs[i].Action == DeleteAction:
+			return t.Escape.Red
+		case diffs[i].Action == AddAction:
+			return t.Escape.Green
+		case diffs[i].Action == UpdateAction:
+			return t.Escape.Blue
+		default:
+			return nil
+		}
 	}
 
-	if *depth != 1 && *depth != 25 && *depth != 500 {
-		return nil, errors.New("invalid value for depth")
-	}
+	bold := []byte("\033[1m")
+	printEscape(t, bold, fmt.Sprintf("| %s | %s |\n", center("bids", 30), center("asks", 30)))
+	printEscape(t, bold, fmt.Sprintf("| %s | %s | %s | %s |\n", center("rate", 15), center("quantity", 12), center("rate", 15), center("quantity", 12)))
 
-	return &config{
-		APIKey:    apiKey,
-		APISecret: apiSecret,
-		Symbols:   strings.Split(*symbols, ","),
-		Depth:     *depth,
-	}, nil
+	for i := 0; i < orderBook.Depth; i++ {
+		bid, ask := orderBook.Bids[i], orderBook.Asks[i]
+		printEscape(t, color(bid, diff.Bids), fmt.Sprintf("| %15s | %12s ", bid.Rate.StringFixed(8), bid.Quantity.StringFixed(4)))
+		printEscape(t, color(ask, diff.Asks), fmt.Sprintf("| %15s | %12s |\n", ask.Rate.StringFixed(8), bid.Quantity.StringFixed(4)))
+	}
 }
 
 func authenticate(ctx context.Context, client *signalr.Client, apiKey, apiSecret string) error {

@@ -1,4 +1,4 @@
-package main
+package bittrex
 
 import (
 	"testing"
@@ -55,7 +55,7 @@ func TestOrderBookEntriesApply(t *testing.T) {
 		name            string
 		deltas          OrderBookEntries
 		expectedEntries OrderBookEntries
-		expectedDiff    OrderBookDiffEntries
+		expectedDiff    OrderBookDeltaEntries
 	}{
 		{
 			name:   "should update delta",
@@ -64,7 +64,7 @@ func TestOrderBookEntriesApply(t *testing.T) {
 				OrderBookEntries{updateFirst},
 				entries[1:]...,
 			),
-			expectedDiff: OrderBookDiffEntries{
+			expectedDiff: OrderBookDeltaEntries{
 				updateFirst.OrderBookDiffEntry(UpdateAction),
 			},
 		},
@@ -75,7 +75,7 @@ func TestOrderBookEntriesApply(t *testing.T) {
 				OrderBookEntries{addFirst},
 				entries...,
 			),
-			expectedDiff: OrderBookDiffEntries{
+			expectedDiff: OrderBookDeltaEntries{
 				addFirst.OrderBookDiffEntry(AddAction),
 			},
 		},
@@ -86,7 +86,7 @@ func TestOrderBookEntriesApply(t *testing.T) {
 				entries,
 				addLast,
 			),
-			expectedDiff: OrderBookDiffEntries{
+			expectedDiff: OrderBookDeltaEntries{
 				addLast.OrderBookDiffEntry(AddAction),
 			},
 		},
@@ -103,7 +103,7 @@ func TestOrderBookEntriesApply(t *testing.T) {
 				entries[4],
 				addLast,
 			),
-			expectedDiff: OrderBookDiffEntries{
+			expectedDiff: OrderBookDeltaEntries{
 				addFirst.OrderBookDiffEntry(AddAction),
 				addMiddle.OrderBookDiffEntry(AddAction),
 				addLast.OrderBookDiffEntry(AddAction),
@@ -115,7 +115,7 @@ func TestOrderBookEntriesApply(t *testing.T) {
 				{Quantity: decimal.Zero, Rate: entries[0].Rate},
 			},
 			expectedEntries: entries[1:],
-			expectedDiff: OrderBookDiffEntries{
+			expectedDiff: OrderBookDeltaEntries{
 				{Action: DeleteAction, Quantity: decimal.Zero, Rate: entries[0].Rate},
 			},
 		},
@@ -130,7 +130,7 @@ func TestOrderBookEntriesApply(t *testing.T) {
 				entries[3],
 				entries[4],
 			},
-			expectedDiff: OrderBookDiffEntries{
+			expectedDiff: OrderBookDeltaEntries{
 				{Action: DeleteAction, Quantity: decimal.Zero, Rate: entries[1].Rate},
 				{Action: DeleteAction, Quantity: decimal.Zero, Rate: entries[2].Rate},
 			},
@@ -141,7 +141,7 @@ func TestOrderBookEntriesApply(t *testing.T) {
 				{Quantity: decimal.Zero, Rate: entries[4].Rate},
 			},
 			expectedEntries: entries[:4],
-			expectedDiff: OrderBookDiffEntries{
+			expectedDiff: OrderBookDeltaEntries{
 				{Action: DeleteAction, Quantity: decimal.Zero, Rate: entries[4].Rate},
 			},
 		},

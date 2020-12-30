@@ -108,6 +108,10 @@ func (s *CallbackStream) Read(args ...interface{}) error {
 		return res.err
 	}
 
+	if args == nil {
+		return nil
+	}
+
 	if err := unmarshalArgs(res.message.Args, args); err != nil {
 		return fmt.Errorf("failed to unmarshal ")
 	}

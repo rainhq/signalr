@@ -45,7 +45,7 @@ func (c *OrdersCommand) Run(ctx context.Context, client *bittrex.Client) error {
 
 func printOrders(t *Terminal, orders *bittrex.Orders, delta *bittrex.OrderDelta) {
 	t.Clear()
-	t.PrintEscape(t.Escape.Bold, fmt.Sprintf("| id | %s | %s | %s |", center("created", 20), center("limit", 15), center("quantity", 12)))
+	t.PrintEscape(t.Escape.Bold, fmt.Sprintf("| id | %s | %s | %s |\n", center("created", 20), center("limit", 15), center("quantity", 12)))
 
 	for _, order := range orders.Data {
 		var color []byte
@@ -57,6 +57,6 @@ func printOrders(t *Terminal, orders *bittrex.Orders, delta *bittrex.OrderDelta)
 		limit := order.Limit.Decimal.StringFixed(4)
 		quantity := order.FillQuantity.StringFixed(8)
 
-		t.PrintEscape(color, fmt.Sprintf("| %s | %20s | %15s | %12s", order.ID, createdAt, limit, quantity))
+		t.PrintEscape(color, fmt.Sprintf("| %s | %20s | %15s | %12s |\n", order.ID, createdAt, limit, quantity))
 	}
 }

@@ -200,6 +200,10 @@ func (c *Client) SubscribeOpenOrders(ctx context.Context, start time.Time, callb
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	if err := c.authenticator.authenticate(ctx); err != nil {
+		return err
+	}
+
 	if err := subscribe(ctx, c.signalrClient, []string{"order"}); err != nil {
 		return err
 	}

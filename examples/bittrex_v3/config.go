@@ -25,7 +25,8 @@ func parseArgs(args []string) *Config {
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "usage: bittrex_v3 COMMAND")
 		fmt.Fprintln(fs.Output(), "commands:")
-		fmt.Fprintln(fs.Output(), " - orders\tWatch orders")
+		fmt.Fprintln(fs.Output(), " - closedorders\tList closed orders")
+		fmt.Fprintln(fs.Output(), " - openorders\tWatch open orders")
 		fmt.Fprintln(fs.Output(), " - orderbook\tWatch orderbook")
 		fs.PrintDefaults()
 	}
@@ -45,10 +46,12 @@ func parseArgs(args []string) *Config {
 
 	var cmd Command
 	switch fs.Arg(0) {
+	case "closedorders":
+		cmd = &ClosedOrdersCommand{}
+	case "openorders":
+		cmd = &OpenOrdersCommand{}
 	case "orderbook":
 		cmd = &OrderBookCommand{}
-	case "orders":
-		cmd = &OrdersCommand{}
 	default:
 		fmt.Fprintf(os.Stderr, "invalid command %q\n", fs.Arg(0))
 		fs.Usage()

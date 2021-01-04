@@ -12,7 +12,6 @@ import (
 
 	"github.com/rainhq/signalr/v2"
 	"github.com/rainhq/signalr/v2/bittrex"
-	"golang.org/x/sync/errgroup"
 )
 
 func main() {
@@ -58,9 +57,5 @@ func run(config *Config) error {
 	signalrClient := signalr.NewClient("c3", conn)
 	client := bittrex.NewClient(http.DefaultClient, signalrClient, config.APIKey, config.APISecret)
 
-	errg, ctx := errgroup.WithContext(ctx)
-	errg.Go(func() error { return client.Run(ctx) })
-	errg.Go(func() error { return config.Command.Run(ctx, client) })
-
-	return errg.Wait()
+	return config.Command.Run(ctx, client)
 }

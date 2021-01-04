@@ -1,9 +1,7 @@
 package main
 
 import (
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 
@@ -51,6 +49,10 @@ func NewTerminal(opts ...TermOpt) (*Terminal, error) {
 	return &t, nil
 }
 
+func (t *Terminal) Write(buf []byte) (int, error) {
+	return t.delegate.Write(buf)
+}
+
 func (t *Terminal) PrintEscape(esc []byte, s string) {
 	fmt.Fprint(t.delegate, string(esc), s, string(t.Escape.Reset))
 }
@@ -61,18 +63,6 @@ func (t *Terminal) Clear() {
 
 func (t *Terminal) ReadLine() (string, error) {
 	return t.delegate.ReadLine()
-}
-
-func (t *Terminal) Wait() error {
-	for {
-		_, err := t.ReadLine()
-		switch {
-		case errors.Is(err, io.EOF):
-			return nil
-		case err != nil:
-			return err
-		}
-	}
 }
 
 func (t *Terminal) Close() error {

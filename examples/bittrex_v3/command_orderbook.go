@@ -23,7 +23,8 @@ func (c *OrderBookCommand) Parse(args []string) {
 	_ = fs.Parse(args)
 
 	if *depth != 1 && *depth != 25 && *depth != 500 {
-		fmt.Fprint(os.Stderr, "invalid value for depth")
+		fmt.Fprintln(os.Stderr, "invalid value for depth")
+		fs.Usage()
 		os.Exit(1)
 	}
 
@@ -48,12 +49,7 @@ func (c *OrderBookCommand) Run(ctx context.Context, client *bittrex.Client) erro
 			return nil
 		})
 	})
-	g.Go(func() error {
-		err := t.Wait()
-		cancel()
-
-		return err
-	})
+	g.Go(func() error { return client.Run(ctx) })
 
 	return g.Wait()
 }

@@ -137,7 +137,8 @@ func (c *Client) SubscribeOrderBook(ctx context.Context, marketSymbol string, de
 }
 
 func (c *Client) GetClosedOrders(ctx context.Context, start time.Time) (*Orders, error) {
-	endpoint := fmt.Sprintf("%s/orders/closed?startDate=%s", Endpoint, start.Format(time.RFC3339))
+	startDate := start.UTC().Format(time.RFC3339)
+	endpoint := fmt.Sprintf("%s/orders/closed?startDate=%s", Endpoint, startDate)
 	req, err := c.authenticator.Request(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
@@ -149,12 +150,12 @@ func (c *Client) GetClosedOrders(ctx context.Context, start time.Time) (*Orders,
 	}
 
 	if len(res) == 0 {
-		return nil, nil
+		return &Orders{}, nil
 	}
 
 	for {
 		last := res[len(res)-1]
-		endpoint := fmt.Sprintf("%s/orders/closed?nextPageToken=%s", Endpoint, last.ID)
+		endpoint := fmt.Sprintf("%s/orders/closed?startDate=%s&nextPageToken=%s", Endpoint, startDate, last.ID)
 
 		req, err := c.authenticator.Request(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
@@ -288,13 +289,13 @@ func doRequest(httpClient *http.Client, req *http.Request, dest interface{}) (in
 	}
 	defer httpRes.Body.Close()
 
-	if httpRes.StatusCode != 200 {
-		return 0, fmt.Errorf("failed to %s %s: %d", req.Method, req.URL.Path, httpRes.StatusCode)
-	}
-
 	data, err := ioutil.ReadAll(httpRes.Body)
 	if err != nil {
 		return 0, fmt.Errorf("failed to read response to %s %s: %w", req.Method, req.URL.Path, err)
+	}
+
+	if httpRes.StatusCode != 200 {
+		return 0, fmt.Errorf("failed to %s %s: %d %s", req.Method, req.URL.Path, httpRes.StatusCode, string(data))
 	}
 
 	if err := json.Unmarshal(data, dest); err != nil {

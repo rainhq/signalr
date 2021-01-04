@@ -9,11 +9,11 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-type OrdersCommand struct{}
+type OpenOrdersCommand struct{}
 
-func (c *OrdersCommand) Parse(args []string) {}
+func (c *OpenOrdersCommand) Parse(args []string) {}
 
-func (c *OrdersCommand) Run(ctx context.Context, client *bittrex.Client) error {
+func (c *OpenOrdersCommand) Run(ctx context.Context, client *bittrex.Client) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -29,21 +29,16 @@ func (c *OrdersCommand) Run(ctx context.Context, client *bittrex.Client) error {
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return client.SubscribeOpenOrders(ctx, start, func(orders *bittrex.Orders, delta *bittrex.OrderDelta) error {
-			printOrders(t, orders, delta)
+			printOpenOrders(t, orders, delta)
 			return nil
 		})
 	})
-	g.Go(func() error {
-		err := t.Wait()
-		cancel()
-
-		return err
-	})
+	g.Go(func() error { return client.Run(ctx) })
 
 	return g.Wait()
 }
 
-func printOrders(t *Terminal, orders *bittrex.Orders, delta *bittrex.OrderDelta) {
+func printOpenOrders(t *Terminal, orders *bittrex.Orders, delta *bittrex.OrderDelta) {
 	t.Clear()
 	t.PrintEscape(t.Escape.Bold, fmt.Sprintf("| id | %s | %s | %s |\n", center("created", 20), center("limit", 15), center("quantity", 12)))
 

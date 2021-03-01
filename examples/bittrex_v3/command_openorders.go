@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
+	"github.com/juju/ansiterm"
 	"github.com/rainhq/signalr/v2/bittrex"
 	"golang.org/x/sync/errgroup"
 )
@@ -17,19 +19,15 @@ func (c *OpenOrdersCommand) Run(ctx context.Context, client *bittrex.Client) err
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	t, err := NewTerminal(HideCursor())
-	if err != nil {
-		return err
-	}
-	defer t.Close()
-
 	now := time.Now()
 	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+
+	w := ansiterm.NewTabWriter(os.Stdout, 8, 4, 1, ' ', 0)
 
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
 		return client.SubscribeOpenOrders(ctx, start, func(orders *bittrex.Orders, delta *bittrex.OrderDelta) error {
-			printOpenOrders(t, orders, delta)
+			printOpenOrders(w, orders, delta)
 			return nil
 		})
 	})
@@ -38,20 +36,18 @@ func (c *OpenOrdersCommand) Run(ctx context.Context, client *bittrex.Client) err
 	return g.Wait()
 }
 
-func printOpenOrders(t *Terminal, orders *bittrex.Orders, delta *bittrex.OrderDelta) {
-	t.Clear()
-	t.PrintEscape(t.Escape.Bold, fmt.Sprintf("| id | %s | %s | %s |\n", center("created", 20), center("limit", 15), center("quantity", 12)))
+func printOpenOrders(w *ansiterm.TabWriter, orders *bittrex.Orders, delta *bittrex.OrderDelta) {
+	w.SetStyle(ansiterm.Bold)
+	fmt.Fprintf(w, "id\tcreated\tlimit\tquantity\t\n")
+	w.Reset()
 
 	for _, order := range orders.Data {
-		var color []byte
-		if order.ID == delta.Order.ID {
-			color = actionToColor(t, delta.Action)
-		}
-
 		createdAt := order.CreatedAt.Format(time.RFC3339)
 		limit := order.Limit.Decimal.StringFixed(4)
 		quantity := order.FillQuantity.StringFixed(8)
 
-		t.PrintEscape(color, fmt.Sprintf("| %s | %20s | %15s | %12s |\n", order.ID, createdAt, limit, quantity))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t\n", order.ID, createdAt, limit, quantity)
 	}
+
+	w.Flush()
 }

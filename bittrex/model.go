@@ -231,3 +231,9 @@ func (s *OrderStatus) UnmarshalJSON(data []byte) error {
 	*s = OrderStatus(v)
 	return nil
 }
+
+type Balance struct {
+	CurrencySymbol string          `json:"currencySymbol"`
+	Total          decimal.Decimal `json:"decimal"`
+	Available      decimal.Decimal `json:"available"`
+}

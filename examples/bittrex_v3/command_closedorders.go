@@ -7,6 +7,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/juju/ansiterm"
+
 	"github.com/rainhq/signalr/v2/bittrex"
 )
 
@@ -41,24 +43,20 @@ func (c *ClosedOrdersCommand) Run(ctx context.Context, client *bittrex.Client) e
 		return err
 	}
 
-	t, err := NewTerminal()
-	if err != nil {
-		return err
-	}
-	defer t.Close()
-
-	printClosedOrders(t, orders)
-	return nil
-}
-
-func printClosedOrders(t *Terminal, orders *bittrex.Orders) {
-	t.PrintEscape(t.Escape.Bold, fmt.Sprintf("| %s | %s | %s | %s | %s |\n", center("id", 36), center("symbol", 8), center("closed", 20), center("limit", 15), center("quantity", 16)))
+	w := ansiterm.NewTabWriter(os.Stdout, 8, 4, 1, ' ', 0)
+	w.SetStyle(ansiterm.Bold)
+	fmt.Fprintf(w, "id\tsymbol\tclosed\tlimit\tquantity\t\n")
+	w.Reset()
 
 	for _, order := range orders.Data {
 		closedAt := order.ClosedAt.Format(time.RFC3339)
 		limit := order.Limit.Decimal.StringFixed(4)
 		quantity := order.FillQuantity.StringFixed(8)
 
-		fmt.Fprintf(t, "| %36s | %8s | %20s | %15s | %16s |\n", order.ID, order.MarketSymbol, closedAt, limit, quantity)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t\n", order.ID, order.MarketSymbol, closedAt, limit, quantity)
 	}
+
+	w.Flush()
+
+	return nil
 }

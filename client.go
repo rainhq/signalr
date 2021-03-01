@@ -23,11 +23,9 @@ type Invocation struct {
 }
 
 type CallbackStream struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	ch      chan callbackResult
-	backlog []ClientMsg
-	err     error
+	ctx    context.Context
+	cancel context.CancelFunc
+	ch     chan callbackResult
 }
 
 func NewClient(hub string, conn *Conn) *Client {
@@ -77,7 +75,7 @@ func (c *Client) Invoke(ctx context.Context, method string, args ...interface{})
 	return inv
 }
 
-func (c *Client) Callback(ctx context.Context, method string) *CallbackStream {
+func (c *Client) Callback(ctx context.Context, method string) (*CallbackStream, error) {
 	return c.callbacks.create(ctx, method)
 }
 
@@ -125,17 +123,6 @@ func (s *CallbackStream) readResult() callbackResult {
 	case <-s.ctx.Done():
 		return callbackResult{err: s.ctx.Err()}
 	default:
-	}
-
-	switch {
-	case len(s.backlog) == 1:
-		clientMsg := s.backlog[0]
-		s.backlog = nil
-		return callbackResult{message: clientMsg}
-	case len(s.backlog) > 1:
-		clientMsg := s.backlog[0]
-		s.backlog = s.backlog[1:]
-		return callbackResult{message: clientMsg}
 	}
 
 	select {
@@ -264,19 +251,17 @@ func (i *invocations) removeAll() {
 }
 
 type callbacks struct {
-	mtx     sync.Mutex
-	data    map[string]*CallbackStream
-	backlog map[string][]ClientMsg
+	mtx  sync.Mutex
+	data map[string]*CallbackStream
 }
 
 func newCallbacks() *callbacks {
 	return &callbacks{
-		data:    make(map[string]*CallbackStream),
-		backlog: make(map[string][]ClientMsg),
+		data: make(map[string]*CallbackStream),
 	}
 }
 
-func (c *callbacks) create(ctx context.Context, method string) *CallbackStream {
+func (c *callbacks) create(ctx context.Context, method string) (*CallbackStream, error) {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
@@ -284,22 +269,21 @@ func (c *callbacks) create(ctx context.Context, method string) *CallbackStream {
 		select {
 		case <-cb.ctx.Done():
 		default:
-			return &CallbackStream{err: &DuplicateCallbackError{method: method}}
+			return nil, &DuplicateCallbackError{method: method}
 		}
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
 
 	res := &CallbackStream{
-		ctx:     ctx,
-		cancel:  cancel,
-		ch:      make(chan callbackResult, 1),
-		backlog: c.backlog[method],
+		ctx:    ctx,
+		cancel: cancel,
+		ch:     make(chan callbackResult, 16),
 	}
 
 	c.data[method] = res
 
-	return res
+	return res, nil
 }
 
 func (c *callbacks) process(msg *Message) {
@@ -314,7 +298,6 @@ func (c *callbacks) process(msg *Message) {
 		method := clientMsg.Method
 		callback, ok := c.data[method]
 		if !ok {
-			c.backlog[method] = append(c.backlog[method], msg.Messages...)
 			continue
 		}
 
@@ -323,6 +306,10 @@ func (c *callbacks) process(msg *Message) {
 			close(callback.ch)
 			delete(c.data, method)
 		case callback.ch <- callbackResult{message: clientMsg}:
+		default:
+			callback.cancel()
+			close(callback.ch)
+			delete(c.data, method)
 		}
 	}
 }
@@ -341,7 +328,6 @@ func (c *callbacks) removeAll() {
 	}
 
 	c.data = make(map[string]*CallbackStream)
-	c.backlog = make(map[string][]ClientMsg)
 }
 
 type invocationResult struct {

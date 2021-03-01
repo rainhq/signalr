@@ -58,7 +58,10 @@ func main() {
 	errg, ctx := errgroup.WithContext(ctx)
 	errg.Go(func() error { return client.Run(ctx) })
 	errg.Go(func() error {
-		stream := client.Callback(ctx, "uE")
+		stream, err := client.Callback(ctx, "uE")
+		if err != nil {
+			return err
+		}
 		defer stream.Close()
 
 		for {

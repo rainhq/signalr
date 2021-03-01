@@ -46,6 +46,8 @@ func parseArgs(args []string) *Config {
 
 	var cmd Command
 	switch fs.Arg(0) {
+	case "balances":
+		cmd = &BalancesCommand{}
 	case "closedorders":
 		cmd = &ClosedOrdersCommand{}
 	case "openorders":

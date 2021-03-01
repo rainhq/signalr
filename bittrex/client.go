@@ -41,6 +41,20 @@ func (c *Client) Run(ctx context.Context) error {
 	return g.Wait()
 }
 
+func (c *Client) GetBalances(ctx context.Context) ([]Balance, error) {
+	req, err := c.authenticator.Request(ctx, http.MethodGet, fmt.Sprintf("%s/balances", Endpoint), nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare balances request: %w", err)
+	}
+
+	var res []Balance
+	if err := doRequest(c.httpClient, req, &res); err != nil {
+		return nil, err
+	}
+
+	return res, nil
+}
+
 func (c *Client) GetOrderBook(ctx context.Context, marketSymbol string, depth int) (*OrderBook, error) {
 	endpoint := fmt.Sprintf("%s/markets/%s/orderbook?depth=%d", Endpoint, marketSymbol, depth)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
@@ -52,7 +66,7 @@ func (c *Client) GetOrderBook(ctx context.Context, marketSymbol string, depth in
 		Bids OrderBookEntries `json:"bid"`
 		Asks OrderBookEntries `json:"ask"`
 	}
-	sequence, err := doRequest(c.httpClient, req, &res)
+	sequence, err := doRequestSequence(c.httpClient, req, &res)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +101,10 @@ func (c *Client) SubscribeOrderBook(ctx context.Context, marketSymbol string, de
 		return err
 	}
 
-	stream := c.signalrClient.Callback(ctx, "orderBook")
+	stream, err := c.signalrClient.Callback(ctx, "orderBook")
+	if err != nil {
+		return err
+	}
 	defer stream.Close()
 
 	for {
@@ -145,7 +162,7 @@ func (c *Client) GetClosedOrders(ctx context.Context, start time.Time) (*Orders,
 	}
 
 	var res []*Order
-	if _, err := doRequest(c.httpClient, req, &res); err != nil {
+	if _, err := doRequestSequence(c.httpClient, req, &res); err != nil {
 		return nil, err
 	}
 
@@ -163,7 +180,7 @@ func (c *Client) GetClosedOrders(ctx context.Context, start time.Time) (*Orders,
 		}
 
 		var orders []*Order
-		_, err = doRequest(c.httpClient, req, &orders)
+		_, err = doRequestSequence(c.httpClient, req, &orders)
 		if err != nil {
 			return nil, err
 		}
@@ -186,7 +203,7 @@ func (c *Client) GetOpenOrders(ctx context.Context) (*Orders, error) {
 	}
 
 	var res []*Order
-	sequence, err := doRequest(c.httpClient, req, &res)
+	sequence, err := doRequestSequence(c.httpClient, req, &res)
 	if err != nil {
 		return nil, err
 	}
@@ -209,6 +226,12 @@ func (c *Client) SubscribeOpenOrders(ctx context.Context, start time.Time, callb
 		return err
 	}
 
+	stream, err := c.signalrClient.Callback(ctx, "order")
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+
 	orders, err := c.GetOpenOrders(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get open orders: %w", err)
@@ -221,7 +244,6 @@ func (c *Client) SubscribeOpenOrders(ctx context.Context, start time.Time, callb
 		return err
 	}
 
-	stream := c.signalrClient.Callback(ctx, "order")
 	for {
 		var res struct {
 			Sequence int   `json:"sequence"`
@@ -280,7 +302,32 @@ func subscribe(ctx context.Context, client *signalr.Client, streams []string) er
 	return nil
 }
 
-func doRequest(httpClient *http.Client, req *http.Request, dest interface{}) (int, error) {
+func doRequest(httpClient *http.Client, req *http.Request, dest interface{}) error {
+	req.Header.Add("Accept", "application/json")
+
+	httpRes, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to %s %s: %w", req.Method, req.URL.Path, err)
+	}
+	defer httpRes.Body.Close()
+
+	data, err := ioutil.ReadAll(httpRes.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response to %s %s: %w", req.Method, req.URL.Path, err)
+	}
+
+	if httpRes.StatusCode != 200 {
+		return fmt.Errorf("failed to %s %s: %d %s", req.Method, req.URL.Path, httpRes.StatusCode, string(data))
+	}
+
+	if err := json.Unmarshal(data, dest); err != nil {
+		return fmt.Errorf("failed to parse response to %s %s: %w", req.Method, req.URL.Path, err)
+	}
+
+	return nil
+}
+
+func doRequestSequence(httpClient *http.Client, req *http.Request, dest interface{}) (int, error) {
 	req.Header.Add("Accept", "application/json")
 
 	httpRes, err := httpClient.Do(req)

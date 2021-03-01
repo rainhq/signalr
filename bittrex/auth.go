@@ -66,7 +66,12 @@ func (a *authenticator) Request(ctx context.Context, method, url string, body []
 }
 
 func (a *authenticator) Run(ctx context.Context) error {
-	stream := a.signalrClient.Callback(ctx, "authenticationExpiring")
+	stream, err := a.signalrClient.Callback(ctx, "authenticationExpiring")
+	if err != nil {
+		return err
+	}
+	defer stream.Close()
+
 	for {
 		if err := stream.Read(); err != nil {
 			return err

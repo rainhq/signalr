@@ -1,19 +1,8 @@
-build:
-	go build -mod=vendor
+include makefiles/shared.mk
+include makefiles/git.mk
+include makefiles/go.mk
 
-test:
-	go test -race ./...
+bin/bittrex_v3:
+	cd examples/bittrex_v3 && go build -o ../../bin .
 
-cover:
-	go test -coverprofile=c.out -covermode=atomic -race ./...
-	cp c.out coverage.txt
-
-lint:
-	/bin/bash -c "golangci-lint --version | grep -q 1.15.0 || curl -sfL https://install.goreleaser.com/github.com/golangci/golangci-lint.sh | sh -s -- -b $(GOPATH)/bin v1.15.0"
-	golangci-lint run --enable-all
-
-update:
-	go get -u ./...
-	go mod tidy
-	go mod vendor -v
-	pre-commit autoupdate
+build: bin/bittrex_v3

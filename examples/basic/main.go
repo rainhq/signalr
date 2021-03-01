@@ -1,33 +1,31 @@
 package main
 
 import (
+	"context"
 	"log"
 
-	"github.com/carterjones/signalr"
+	"github.com/rainhq/signalr/v2"
 )
 
 func main() {
-	// Prepare a SignalR client.
-	c := signalr.New(
-		"fake-server.definitely-not-real",
-		"1.5",
-		"/signalr",
-		`[{"name":"awesomehub"}]`,
-		nil,
-	)
+	ctx := context.Background()
 
-	// Define message and error handlers.
-	msgHandler := func(msg signalr.Message) { log.Println(msg) }
-	panicIfErr := func(err error) {
-		if err != nil {
-			log.Panic(err)
-		}
+	// Prepare a SignalR client.
+	c, err := signalr.Dial(
+		ctx,
+		"https://fake-server.definitely-not-real/signalr",
+		`[{"name":"awesomehub"}]`,
+	)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	// Start the connection.
-	err := c.Run(msgHandler, panicIfErr)
-	panicIfErr(err)
+	var msg signalr.Message
+	for {
+		if err := c.ReadMessage(ctx, &msg); err != nil {
+			log.Fatal(err)
+		}
 
-	// Wait indefinitely.
-	select {}
+		log.Println(msg)
+	}
 }

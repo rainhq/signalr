@@ -3,7 +3,7 @@ module github.com/rainhq/signalr/v2
 go 1.15
 
 require (
-	github.com/cenkalti/backoff/v4 v4.1.0
+	github.com/cenkalti/backoff/v4 v4.1.1
 	github.com/gorilla/websocket v1.4.2
 	github.com/shopspring/decimal v1.2.0
 	github.com/stretchr/testify v1.6.1
